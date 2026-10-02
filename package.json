@@ -1,0 +1,17 @@
+{
+  "name": "tank-brawl",
+  "version": "1.0.0",
+  "description": "坦克大亂鬥 — 多人連線坦克對戰（區網 / 網路）",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node test/map-check.js && node test/sim-test.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.22.0"
+  }
+}

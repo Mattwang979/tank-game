@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>坦克大亂鬥 TANK BRAWL</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💥</text></svg>">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- 遊戲內 HUD -->
+  <div id="hud" class="hidden">
+    <div id="topbar">
+      <div id="score-left"></div>
+      <div id="timer-box"><div id="timer">5:00</div><div id="goal"></div></div>
+      <div id="score-right"></div>
+    </div>
+    <div id="killfeed"></div>
+    <div id="announce"></div>
+    <div id="toast"></div>
+
+    <div id="deathscreen" class="hidden">
+      <div class="dead-title">💀 被擊毀！</div>
+      <div id="deathby"></div>
+      <div id="respawn"></div>
+    </div>
+
+    <div id="bottomhud">
+      <div class="hud-block hp-block">
+        <div id="hpbar"><div id="hpfill"></div><div id="shieldfill"></div><span id="hptext">100</span></div>
+      </div>
+      <div class="hud-block"><div class="hud-label">砲彈</div><div id="ammo"></div></div>
+      <div class="hud-block"><div class="hud-label">地雷 <kbd>右鍵</kbd></div><div id="mines"></div></div>
+      <div class="hud-block"><div class="hud-label">衝刺 <kbd>Space</kbd></div><div id="dash"><div id="dashfill"></div></div></div>
+      <div id="buffs"></div>
+    </div>
+
+    <div id="netinfo"></div>
+    <button id="menuBtn" title="選單 (Esc)">⚙</button>
+    <div id="tabhint"><kbd>Tab</kbd> 計分板　<kbd>Esc</kbd> 選單 / 加電腦　<kbd>1</kbd>~<kbd>5</kbd> 嗆聲</div>
+
+    <div id="scoreboard" class="hidden"></div>
+
+    <div id="menu" class="hidden">
+      <div class="panel">
+        <div class="panel-head"><h2>⚙ 房間設定</h2><button class="close" id="menuClose">✕</button></div>
+        <div class="row invite">
+          <div class="label">邀請室友</div>
+          <div id="inviteLinks"></div>
+        </div>
+        <div class="row">
+          <div class="label">模式</div>
+          <div class="seg" id="modeSeg">
+            <button data-v="ffa">個人混戰</button>
+            <button data-v="team">紅藍團隊戰</button>
+          </div>
+          <button id="teamBtn" class="small">換隊</button>
+        </div>
+        <div class="row">
+          <div class="label">勝利條件</div>
+          <select id="targetSel">
+            <option value="5">5 殺</option><option value="10">10 殺</option><option value="15">15 殺</option>
+            <option value="20">20 殺</option><option value="30">30 殺</option><option value="50">50 殺</option>
+          </select>
+          <div class="label">時間</div>
+          <select id="timeSel">
+            <option value="120">2 分</option><option value="180">3 分</option><option value="300">5 分</option>
+            <option value="480">8 分</option><option value="600">10 分</option><option value="900">15 分</option>
+          </select>
+        </div>
+        <div class="row">
+          <div class="label">地圖</div>
+          <select id="mapSel"></select>
+          <button id="restartBtn" class="small warn">重新開始</button>
+        </div>
+        <div class="row">
+          <div class="label">電腦玩家</div>
+          <button class="small" data-bot="easy">＋ 簡單</button>
+          <button class="small" data-bot="normal">＋ 普通</button>
+          <button class="small" data-bot="hard">＋ 困難</button>
+          <button class="small warn" id="rmBot">－ 移除</button>
+        </div>
+        <div class="row">
+          <div class="label">聲音</div>
+          <button class="small" id="sfxBtn">音效：開</button>
+          <button class="small" id="musicBtn">音樂：開</button>
+        </div>
+        <div class="controls-help">
+          <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移動</div>
+          <div><kbd>滑鼠</kbd> 瞄準　<kbd>左鍵</kbd> 開砲（按住連發）</div>
+          <div><kbd>右鍵</kbd> / <kbd>E</kbd> 埋地雷</div>
+          <div><kbd>Space</kbd> / <kbd>Shift</kbd> 衝刺</div>
+          <div><kbd>Tab</kbd> 計分板　<kbd>1</kbd>~<kbd>5</kbd> 嗆聲</div>
+          <div><kbd>M</kbd> 音效開關　<kbd>N</kbd> 音樂開關</div>
+        </div>
+        <button id="leaveBtn" class="small warn">離開房間</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 大廳 -->
+  <div id="lobby">
+    <div class="lobby-card">
+      <div class="logo">
+        <div class="logo-cn">坦克大亂鬥</div>
+        <div class="logo-en">TANK BRAWL</div>
+      </div>
+      <label>你的名字</label>
+      <input id="nameInput" maxlength="12" placeholder="輸入暱稱" autocomplete="off">
+      <label>坦克顏色</label>
+      <div id="colorPick"></div>
+      <label>房間代碼 <span class="hint">（同一個代碼就會進同一場）</span></label>
+      <input id="roomInput" maxlength="12" placeholder="TANK" autocomplete="off">
+      <button id="joinBtn">開戰！</button>
+      <div id="lobbyMsg"></div>
+      <div class="tips">
+        <div class="tip-title">🔥 戰鬥技巧</div>
+        <ul>
+          <li>砲彈撞到<b>鋼牆會反彈一次</b>，學會打角度、繞牆擊殺！小心反彈打到自己。</li>
+          <li>地雷埋下 1 秒後<b>隱形</b>，敵人要靠很近才看得到。開砲打地雷可以提前引爆。</li>
+          <li>躲進<b>草叢</b>敵人就看不到你，但開砲會暴露位置。</li>
+          <li>射爆<b>油桶</b>會連鎖爆炸，把敵人引過去再一起送上天。</li>
+          <li>兩顆砲彈互撞會抵銷，用砲彈擋砲彈！衝刺可以閃子彈。</li>
+          <li>彈藥只有 4 發會自動補充，亂打就等死。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div id="disconnected" class="hidden">
+    <div class="panel">
+      <h2>連線中斷 😵</h2>
+      <p>伺服器關掉了或網路斷了。</p>
+      <button onclick="location.reload()">重新連線</button>
+    </div>
+  </div>
+
+  <script src="shared/core.js"></script>
+  <script src="audio.js"></script>
+  <script src="render.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
