@@ -1,7 +1,7 @@
 'use strict';
 // 無頭模擬：每張地圖放 6 隻電腦打一場，確認不會出錯、真的會互殺、會用道具和地雷
-const { Room } = require('../server/game');
-const { MAPS } = require('../server/maps');
+const { Room } = require('../shared/game');
+const { MAPS } = require('../shared/maps');
 const { C } = require('../shared/core');
 
 let failed = false;

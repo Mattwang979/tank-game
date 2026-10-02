@@ -13,7 +13,7 @@
   const store = { get: (k, d) => { try { return localStorage.getItem('tb_' + k) || d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem('tb_' + k, v); } catch {} } };
 
   const S = {
-    ws: null, joined: false, myId: 0, room: '', lan: [], port: 0, map: null,
+    conn: null, joined: false, role: null, myId: 0, room: '', lan: [], port: 0, map: null,
     info: null, infoAt: 0, players: new Map(),
     snaps: [], clock: null, bullets: { tm: 0, list: [] }, mines: [], pus: [],
     you: null, pred: null, pending: [], seq: 0, smx: 0, smy: 0, wasAlive: false,
@@ -25,9 +25,18 @@
   // ================================================================ 大廳
   let color = store.get('color', COLORS[Math.floor(Math.random() * COLORS.length)]);
   if (!COLORS.includes(color)) color = COLORS[0];
+  const P2P = Net.mode() !== 'ws';
+  if (Touch.available) document.body.classList.add('coarse');
+  const randomCode = () => Array.from({ length: 4 }, () => 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 31)]).join('');
   $('nameInput').value = store.get('name', '');
   const urlRoom = new URLSearchParams(location.search).get('room');
-  $('roomInput').value = (urlRoom || store.get('room', 'TANK')).toUpperCase();
+  // P2P 房間在公用配對伺服器上，預設給一個隨機代碼避免撞到陌生人
+  $('roomInput').value = (urlRoom || (P2P ? randomCode() : store.get('room', 'TANK'))).toUpperCase();
+  $('newRoomBtn').onclick = () => { $('roomInput').value = randomCode(); };
+  $('netHint').innerHTML = urlRoom
+    ? `朋友邀請你加入房間 <b>${esc(urlRoom.toUpperCase())}</b>，按「開戰！」就進去了`
+    : P2P ? '按「開戰！」開房，進去後按 ⚙ 把連結傳給朋友，<br>他們用手機或電腦點開就能一起玩，不用安裝也不用登入' : '';
+  if (urlRoom) $('joinBtn').textContent = '加入戰鬥！';
   const pick = $('colorPick');
   COLORS.forEach((c) => {
     const d = document.createElement('div');
@@ -41,22 +50,40 @@
   if (!$('nameInput').value) $('nameInput').focus();
 
   function join() {
-    if (S.ws) return;
+    if (S.conn) return;
     const name = $('nameInput').value.trim() || '坦克' + Math.floor(Math.random() * 900 + 100);
     const room = ($('roomInput').value.trim() || 'TANK').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'TANK';
     store.set('name', name); store.set('color', color); store.set('room', room);
     Sfx.init();
     $('lobbyMsg').textContent = '連線中…';
-    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`);
-    S.ws = ws;
-    ws.onopen = () => send({ t: 'join', name, color, room });
-    ws.onmessage = (e) => { try { handle(JSON.parse(e.data)); } catch (err) { console.error(err); } };
-    ws.onclose = () => {
-      if (S.joined) $('disconnected').classList.remove('hidden');
-      else { $('lobbyMsg').textContent = '連不上伺服器 😢'; S.ws = null; }
-    };
+    if (Touch.available) goFullscreen();
+    S.conn = Net.connect(room, {
+      onOpen: () => { S.role = S.conn.role; send({ t: 'join', name, color, room }); },
+      onMessage: (m) => { try { handle(m); } catch (err) { console.error(err); } },
+      onStatus: (text) => { $('lobbyMsg').textContent = text; if (!S.joined && /失敗|連不上/.test(text)) S.conn = null; },
+      onClose: (reason) => {
+        if (S.joined) { $('discReason').textContent = reason || '連線中斷了'; $('disconnected').classList.remove('hidden'); }
+        else { $('lobbyMsg').textContent = '連不上伺服器 😢'; S.conn = null; }
+      },
+    });
+    if (!S.conn) $('lobbyMsg').textContent = '連線模組載入失敗，請重新整理';
   }
-  const send = (o) => { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(o)); };
+  const send = (o) => { if (S.conn) S.conn.send(o); };
+
+  function goFullscreen() {
+    const el = document.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (!req || document.fullscreenElement) return;
+    try {
+      const p = req.call(el, { navigationUI: 'hide' });
+      if (p && p.then) p.then(() => { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {}); }).catch(() => {});
+    } catch (e) {}
+  }
+  let wakeLock = null;
+  async function keepAwake() {
+    try { if (navigator.wakeLock && !wakeLock) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => (wakeLock = null)); } } catch (e) {}
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.joined) { keepAwake(); S.lastMsgAt = performance.now(); } });
 
   // ================================================================ 訊息
   function handle(m) {
@@ -65,8 +92,12 @@
         S.joined = true; S.myId = m.id; S.room = m.room; S.lan = m.lan || []; S.port = m.port;
         $('lobby').classList.add('hidden');
         $('hud').classList.remove('hidden');
-        history.replaceState(null, '', '?room=' + encodeURIComponent(m.room));
+        history.replaceState(null, '', location.pathname + '?room=' + encodeURIComponent(m.room) + keepParams());
+        if (Touch.available) { Touch.enable(); Render.setTouch(true); }
+        keepAwake();
+        checkRotate();
         buildInvite();
+        if (S.role === 'host') setTimeout(() => toast('你是房主！按 ⚙ 複製連結邀請朋友（請保持這個畫面開著）'), 1200);
         setInterval(() => send({ t: 'p', c: performance.now() }), 2000);
         break;
       case 'full':
@@ -82,7 +113,7 @@
         S.players = new Map(m.players.map((p) => [p.id, p]));
         refreshScoreUI(); refreshMenu();
         break;
-      case 's': onSnap(m); break;
+      case 's': S.lastMsgAt = performance.now(); onSnap(m); break;
       case 'P': S.ping = Math.round(performance.now() - m.c); break;
     }
   }
@@ -243,6 +274,7 @@
   canvas.addEventListener('mousedown', (e) => {
     Sfx.init();
     if (!S.joined || S.menuOpen) return;
+    if (Touch.enabled) return;
     if (e.button === 0) { S.mouse.left = true; S.latch |= K.FIRE; }
     if (e.button === 2) { S.mouse.right = true; S.latch |= K.MINE; }
   });
@@ -254,9 +286,9 @@
   addEventListener('contextmenu', (e) => { if (S.joined) e.preventDefault(); });
 
   function sampleKeys() {
-    if (S.menuOpen) { S.latch = 0; return 0; }
+    if (S.menuOpen) { S.latch = 0; if (Touch.enabled) Touch.keys(); return 0; }
     const k_ = S.keys;
-    let k = 0;
+    let k = Touch.enabled ? Touch.keys() : 0;
     if (k_.has('KeyW') || k_.has('ArrowUp')) k |= K.UP;
     if (k_.has('KeyS') || k_.has('ArrowDown')) k |= K.DOWN;
     if (k_.has('KeyA') || k_.has('ArrowLeft')) k |= K.LEFT;
@@ -270,6 +302,7 @@
   }
   function mouseWorld() { return Render.toWorld(S.mouse.sx, S.mouse.sy); }
   function aimAngle() {
+    if (Touch.enabled) return Touch.aimAngle;
     const p = S.pred || S.you;
     if (!p) return 0;
     const m = mouseWorld();
@@ -351,12 +384,14 @@
       decorate(t, me, team, myTeam);
       st.tanks.push(t);
       Sfx.setListener(t.x, t.y);
-      const m = mouseWorld();
+      const m = Touch.enabled ? { x: t.x + Math.cos(t.ta) * 300, y: t.y + Math.sin(t.ta) * 300 } : mouseWorld();
       st.aim = { x: m.x, y: m.y, from: { x: t.x, y: t.y }, ammo: S.you.ammo, ammoT: S.you.ammoT, maxAmmo: C.MAX_AMMO, rail: S.you.rail > 0, rapid: S.you.rapidT > 0 };
-    } else {
+      if (Touch.enabled) { st.aim.ringOnly = true; st.aim.noLine = !Touch.aiming; }
+    } else if (!Touch.enabled) {
       const m = mouseWorld();
       st.aim = { x: m.x, y: m.y };
     }
+    S.visible = st.tanks;
 
     // 砲彈：從最新快照往前外插（含反彈），讓畫面上的砲彈不延遲
     const dtB = Core.clamp((serverNow - S.bullets.tm) / 1000, 0, 0.12);
@@ -423,6 +458,12 @@
     const dashPct = Math.round((1 - y.dashCd / C.DASH_CD) * 100);
     $('dashfill').style.width = dashPct + '%';
     $('dash').classList.toggle('ready', y.dashCd <= 0);
+    if (Touch.enabled) {
+      setHTML('mineBadge', String(y.mines));
+      const bd = $('btnDash');
+      bd.classList.toggle('cd', y.dashCd > 0);
+      bd.style.background = y.dashCd > 0 ? `conic-gradient(rgba(127,227,255,.35) ${dashPct}%, rgba(10,14,20,.55) 0)` : '';
+    }
 
     const buffs = [];
     if (y.protectT > 0) buffs.push(['無敵', '#ffffff', y.protectT]);
@@ -447,7 +488,7 @@
     $('timer').classList.toggle('urgent', playing && sec <= 30);
     if (playing && sec <= 10 && sec > 0 && sec !== S.lastTick) { S.lastTick = sec; Sfx.play('tick'); }
 
-    setHTML('netinfo', `${S.ping}ms · 房間 ${esc(S.room)}`);
+    setHTML('netinfo', `${S.role === 'host' ? '👑 你是房主' : S.ping + 'ms'} · 房間 ${esc(S.room)}`);
   }
 
   function refreshScoreUI() {
@@ -465,7 +506,7 @@
       setHTML('goal', `${esc(info.mapName)} · 先達 ${info.settings.target} 殺${lead && lead.k > 0 ? ` · 領先 <span style="color:${lead.color}">${esc(lead.name)}</span> ${lead.k}` : ''}`);
     }
 
-    const show = S.tabHeld || info.state !== 'playing';
+    const show = S.tabHeld || S.scoreToggle || info.state !== 'playing';
     $('scoreboard').classList.toggle('hidden', !show);
     if (!show) return;
     let head;
@@ -574,15 +615,27 @@
     $('musicBtn').textContent = '音樂：' + (Sfx.musicOn ? '開' : '關');
   }
 
+  function keepParams() {
+    // 測試用參數（net / peerhost / touch）要留著
+    const q = new URLSearchParams(location.search);
+    let out = '';
+    for (const k of ['net', 'peerhost', 'touch', 'debug']) if (q.has(k)) out += `&${k}${q.get(k) ? '=' + encodeURIComponent(q.get(k)) : ''}`;
+    return out;
+  }
+
   function buildInvite() {
     const links = [];
-    const q = '/?room=' + encodeURIComponent(S.room);
+    const q = '?room=' + encodeURIComponent(S.room) + keepParams();
     const local = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(location.hostname);
-    if (!local) links.push(location.origin + q);
-    for (const ip of S.lan) { const u = `http://${ip}:${S.port}${q}`; if (!links.includes(u)) links.push(u); }
-    if (!links.length) links.push(location.origin + q);
-    $('inviteLinks').innerHTML = links.map((u) => `<div class="invite-link"><code>${esc(u)}</code><button class="small" data-copy="${esc(u)}">複製</button></div>`).join('') +
-      '<div style="font-size:11px;color:#8b96a5">室友要連同一個 Wi-Fi；開這個網址就會進到同一個房間</div>';
+    if (!local || P2P) links.push(location.origin + location.pathname + q);
+    if (!P2P) for (const ip of S.lan) { const u = `http://${ip}:${S.port}/${q}`; if (!links.includes(u)) links.push(u); }
+    if (!links.length) links.push(location.origin + location.pathname + q);
+    const canShare = !!navigator.share;
+    $('inviteLinks').innerHTML = links.map((u) => `<div class="invite-link"><code>${esc(u)}</code><button class="small" data-copy="${esc(u)}">複製</button>${canShare ? `<button class="small" data-share="${esc(u)}">分享</button>` : ''}</div>`).join('') +
+      `<div style="font-size:11px;color:#8b96a5">${P2P ? '把連結傳給朋友（LINE、IG 都可以），點開就能玩，手機電腦都行。你是房主的話請不要關掉這個畫面。' : '室友要連同一個 Wi-Fi；開這個網址就會進到同一個房間'}</div>`;
+    $('inviteLinks').querySelectorAll('[data-share]').forEach((b) => (b.onclick = () => {
+      navigator.share({ title: '坦克大亂鬥', text: `來跟我打坦克！房間 ${S.room}`, url: b.dataset.share }).catch(() => {});
+    }));
     $('inviteLinks').querySelectorAll('[data-copy]').forEach((b) => (b.onclick = () => {
       const u = b.dataset.copy;
       const done = () => { b.textContent = '已複製！'; setTimeout(() => (b.textContent = '複製'), 1200); };
@@ -596,6 +649,40 @@
     try { document.execCommand('copy'); done(); } catch {}
     ta.remove();
   }
+
+  // ---------------- 手機專用按鈕
+  Touch.autoAim = () => {
+    const me = (S.visible || []).find((t) => t.me);
+    if (!me) return null;
+    let best = null, bd = Infinity;
+    for (const t of S.visible) {
+      if (t.me || t.ally) continue;
+      const d = Math.hypot(t.x - me.x, t.y - me.y) * (Core.lineClear(S.map, me.x, me.y, t.x, t.y) ? 1 : 3);
+      if (d < bd) { bd = d; best = t; }
+    }
+    return best ? Math.atan2(best.y - me.y, best.x - me.x) : null;
+  };
+  Touch.rapid = () => !!(S.you && (S.you.rapidT > 0));
+  $('btnScore').addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); S.scoreToggle = !S.scoreToggle; refreshScoreUI(); });
+  $('scoreboard').addEventListener('pointerdown', () => { if (S.scoreToggle) { S.scoreToggle = false; refreshScoreUI(); } });
+  $('tauntMenu').innerHTML = TAUNTS.map((t, i) => `<button data-taunt="${i}">${esc(t)}</button>`).join('');
+  $('btnTaunt').addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); $('tauntMenu').classList.toggle('hidden'); });
+  $('tauntMenu').querySelectorAll('[data-taunt]').forEach((b) => b.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    send({ t: 'taunt', i: Number(b.dataset.taunt) });
+    $('tauntMenu').classList.add('hidden');
+  }));
+  // 看門狗：太久沒收到房主 / 伺服器的資料就當作斷線（WebRTC 斷線事件有時候要很久才會觸發）
+  setInterval(() => {
+    if (S.joined && S.lastMsgAt && performance.now() - S.lastMsgAt > 5000 && document.visibilityState === 'visible') {
+      $('discReason').textContent = S.role === 'client' ? '房主離線了（可能關掉畫面或網路斷了）' : '連線中斷了';
+      $('disconnected').classList.remove('hidden');
+    }
+  }, 1000);
+
+  function checkRotate() { $('rotate').classList.toggle('hidden', !(Touch.enabled && innerHeight > innerWidth * 1.05)); }
+  addEventListener('resize', checkRotate);
+  addEventListener('orientationchange', () => setTimeout(() => { checkRotate(); Render.resize(); }, 200));
 
   Render.init(canvas);
   if (/[?&]debug\b/.test(location.search)) window.__tb = S;

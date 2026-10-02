@@ -2,7 +2,12 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#090c10">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="坦克大亂鬥">
   <title>坦克大亂鬥 TANK BRAWL</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💥</text></svg>">
   <link rel="stylesheet" href="style.css">
@@ -34,10 +39,20 @@
       <div class="hud-block"><div class="hud-label">砲彈</div><div id="ammo"></div></div>
       <div class="hud-block"><div class="hud-label">地雷 <kbd>右鍵</kbd></div><div id="mines"></div></div>
       <div class="hud-block"><div class="hud-label">衝刺 <kbd>Space</kbd></div><div id="dash"><div id="dashfill"></div></div></div>
-      <div id="buffs"></div>
     </div>
+    <div id="buffs"></div>
 
     <div id="netinfo"></div>
+    <div id="touchui" class="hidden">
+      <div id="touchzone"></div>
+      <div id="stickL" class="stick"><div class="knob"></div><span class="stick-hint">移動</span></div>
+      <div id="stickR" class="stick"><div class="knob"></div><span class="stick-hint">拖曳瞄準<br>放開開砲</span></div>
+      <button id="btnDash" class="tbtn"><span>⚡</span><i>衝刺</i></button>
+      <button id="btnMine" class="tbtn"><span>💣</span><i>地雷</i><b id="mineBadge">3</b></button>
+      <button id="btnScore" class="tbtn small-t">🏆</button>
+      <button id="btnTaunt" class="tbtn small-t">💬</button>
+      <div id="tauntMenu" class="hidden"></div>
+    </div>
     <button id="menuBtn" title="選單 (Esc)">⚙</button>
     <div id="tabhint"><kbd>Tab</kbd> 計分板　<kbd>Esc</kbd> 選單 / 加電腦　<kbd>1</kbd>~<kbd>5</kbd> 嗆聲</div>
 
@@ -87,7 +102,13 @@
           <button class="small" id="sfxBtn">音效：開</button>
           <button class="small" id="musicBtn">音樂：開</button>
         </div>
-        <div class="controls-help">
+        <div class="controls-help touch-help">
+          <div>👈 左半邊：移動搖桿</div>
+          <div>👉 右半邊：拖曳瞄準、放開開砲</div>
+          <div>👆 右邊輕點：自動瞄準最近的敵人</div>
+          <div>💣 地雷　⚡ 衝刺　🏆 計分　💬 嗆聲</div>
+        </div>
+        <div class="controls-help desk-help">
           <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移動</div>
           <div><kbd>滑鼠</kbd> 瞄準　<kbd>左鍵</kbd> 開砲（按住連發）</div>
           <div><kbd>右鍵</kbd> / <kbd>E</kbd> 埋地雷</div>
@@ -112,10 +133,19 @@
       <label>坦克顏色</label>
       <div id="colorPick"></div>
       <label>房間代碼 <span class="hint">（同一個代碼就會進同一場）</span></label>
-      <input id="roomInput" maxlength="12" placeholder="TANK" autocomplete="off">
+      <div class="room-row">
+        <input id="roomInput" maxlength="12" placeholder="TANK" autocomplete="off" autocapitalize="characters">
+        <button id="newRoomBtn" type="button" title="換一個新房間">🎲 新房間</button>
+      </div>
       <button id="joinBtn">開戰！</button>
       <div id="lobbyMsg"></div>
+      <div id="netHint" class="net-hint"></div>
       <div class="tips">
+        <div class="tip-title touch-only">📱 手機操作</div>
+        <ul class="touch-only">
+          <li>左手拇指：<b>移動</b>；右手拇指：<b>拖曳瞄準、放開開砲</b>，輕點會自動瞄準。</li>
+          <li>右下角 💣 埋地雷、⚡ 衝刺。手機請<b>橫著拿</b>。</li>
+        </ul>
         <div class="tip-title">🔥 戰鬥技巧</div>
         <ul>
           <li>砲彈撞到<b>鋼牆會反彈一次</b>，學會打角度、繞牆擊殺！小心反彈打到自己。</li>
@@ -129,17 +159,26 @@
     </div>
   </div>
 
+  <div id="rotate" class="hidden"><div>📱↻</div><p>請把手機轉成橫的</p></div>
+
   <div id="disconnected" class="hidden">
     <div class="panel">
       <h2>連線中斷 😵</h2>
-      <p>伺服器關掉了或網路斷了。</p>
+      <p id="discReason">伺服器關掉了或網路斷了。</p>
       <button onclick="location.reload()">重新連線</button>
     </div>
   </div>
 
+  <script src="config.js"></script>
+  <script src="vendor/peerjs.min.js"></script>
   <script src="shared/core.js"></script>
+  <script src="shared/maps.js"></script>
+  <script src="shared/bot.js"></script>
+  <script src="shared/game.js"></script>
   <script src="audio.js"></script>
   <script src="render.js"></script>
+  <script src="net.js"></script>
+  <script src="touch.js"></script>
   <script src="main.js"></script>
 </body>
 </html>

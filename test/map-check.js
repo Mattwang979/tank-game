@@ -1,6 +1,6 @@
 'use strict';
 // 檢查每張地圖：尺寸、邊界、出生點互通（不打破磚牆也走得到）
-const { MAPS, parseMap } = require('../server/maps');
+const { MAPS, parseMap } = require('../shared/maps');
 const Core = require('../shared/core');
 const { T, TILE } = Core;
 
