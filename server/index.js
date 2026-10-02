@@ -1,22 +1,24 @@
 'use strict';
 /*
- * HTTP 靜態檔案 + WebSocket 伺服器。
+ * 區網伺服器模式：HTTP 靜態檔案 + WebSocket。
  *   npm start           → http://localhost:3000
  *   PORT=8080 npm start → 換 port
+ * （不想架伺服器的話，GitHub Pages 上的版本是 P2P 模式，開房的人的瀏覽器就是伺服器）
  */
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { performance } = require('perf_hooks');
 const { WebSocketServer } = require('ws');
-const { Room } = require('./game');
+const { Room, createClient } = require('../shared/game');
 const { C } = require('../shared/core');
 
 const PORT = Number(process.env.PORT) || 3000;
 const ROOT = path.join(__dirname, '..');
 const PUBLIC = path.join(ROOT, 'public');
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
+const SHARED = path.join(ROOT, 'shared');
+const PEERJS = path.join(ROOT, 'node_modules', 'peerjs', 'dist', 'peerjs.min.js');
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json' };
 
 function lanIPs() {
   const out = [];
@@ -27,12 +29,19 @@ function lanIPs() {
 }
 
 const server = http.createServer((req, res) => {
-  let url = decodeURIComponent((req.url || '/').split('?')[0]);
+  let url;
+  try { url = decodeURIComponent((req.url || '/').split('?')[0]); } catch { res.writeHead(400); return res.end(); }
   if (url === '/') url = '/index.html';
+  if (url === '/config.js') {
+    res.writeHead(200, { 'Content-Type': MIME['.js'], 'Cache-Control': 'no-cache' });
+    return res.end("window.TB_NET = 'ws';\n");
+  }
+  const rel = path.normalize(url).replace(/^([/\\]*\.\.)+/, '');
   let file;
-  if (url === '/shared/core.js') file = path.join(ROOT, 'shared', 'core.js');
-  else file = path.join(PUBLIC, path.normalize(url).replace(/^([/\\]*\.\.)+/, ''));
-  if (!file.startsWith(PUBLIC) && !file.startsWith(path.join(ROOT, 'shared'))) { res.writeHead(403); return res.end(); }
+  if (rel.replace(/\\/g, '/').startsWith('/shared/')) file = path.join(ROOT, rel);
+  else if (rel.replace(/\\/g, '/') === '/vendor/peerjs.min.js') file = PEERJS;
+  else file = path.join(PUBLIC, rel);
+  if (file !== PEERJS && !file.startsWith(PUBLIC + path.sep) && !file.startsWith(SHARED + path.sep)) { res.writeHead(403); return res.end(); }
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
     res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
@@ -41,39 +50,17 @@ const server = http.createServer((req, res) => {
 });
 
 const rooms = new Map();
+const getRoom = (code) => {
+  let room = rooms.get(code);
+  if (!room) { room = new Room(code); rooms.set(code, room); }
+  return room;
+};
 const wss = new WebSocketServer({ server, maxPayload: 16 * 1024 });
 
-const clean = (s, n) => String(s || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, n);
-
 wss.on('connection', (ws) => {
-  let room = null, player = null;
-  ws.on('message', (data) => {
-    let msg;
-    try { msg = JSON.parse(data); } catch { return; }
-    if (!msg || typeof msg !== 'object') return;
-    if (msg.t === 'join' && !player) {
-      const code = clean(msg.room, 12).toUpperCase().replace(/[^A-Z0-9]/g, '') || 'TANK';
-      room = rooms.get(code);
-      if (!room) { room = new Room(code); rooms.set(code, room); }
-      player = room.addPlayer({ name: clean(msg.name, 12) || '無名坦克', color: msg.color, ws });
-      if (!player) { ws.send(JSON.stringify({ t: 'full' })); room = null; return; }
-      room.emptySince = null;
-      ws.send(JSON.stringify({ t: 'welcome', id: player.id, room: code, lan: lanIPs(), port: PORT }));
-      ws.send(room.mapMsg());
-      ws.send(JSON.stringify(room.infoMsg()));
-      return;
-    }
-    if (!player) return;
-    switch (msg.t) {
-      case 'i': room.input(player, msg.l); break;
-      case 'cmd': room.command(player, msg); break;
-      case 'taunt': room.taunt(player, msg.i); break;
-      case 'p': ws.send(JSON.stringify({ t: 'P', c: msg.c })); break;
-    }
-  });
-  ws.on('close', () => {
-    if (room && player) room.removePlayer(player.id);
-  });
+  const client = createClient(ws, getRoom, () => ({ lan: lanIPs(), port: PORT }));
+  ws.on('message', (data) => client.message(String(data)));
+  ws.on('close', () => client.close());
   ws.on('error', () => {});
 });
 

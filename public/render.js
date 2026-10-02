@@ -10,6 +10,7 @@ const Render = (() => {
   const particles = [], rings = [], beams = [], floaters = [], ghosts = [];
   const treads = new Map();
   let shake = 0, hurtFlash = 0, hitMarker = 0, time = 0, killFlash = 0;
+  let touchMode = false, ls = 1; // ls：文字放大倍率（手機上地圖縮很小時，名字和數字要放大才看得到）
 
   const PU_COLOR = { heal: '#5cff6e', shield: '#7fe3ff', rapid: '#ffb142', triple: '#ffd84d', rail: '#ff6ec7', mines: '#ff5a3d', speed: '#4da6ff' };
 
@@ -57,9 +58,10 @@ const Render = (() => {
   }
   function layout() {
     if (!map) return;
-    const top = view.ch > 600 ? 52 : 40, bottom = view.ch > 600 ? 76 : 56;
-    const availH = Math.max(200, view.ch - top - bottom);
+    const top = touchMode ? 30 : view.ch > 600 ? 52 : 40, bottom = touchMode ? 4 : view.ch > 600 ? 76 : 56;
+    const availH = Math.max(120, view.ch - top - bottom);
     view.s = Math.min((view.cw - 8) / W, availH / H);
+    ls = Math.min(2.4, Math.max(1, 0.85 / view.s));
     view.ox = (view.cw - W * view.s) / 2;
     view.oy = top + (availH - H * view.s) / 2;
     groundDirty = true;
@@ -489,36 +491,39 @@ const Render = (() => {
   }
 
   function drawLabel(c, t, isMe, teamColor) {
-    const y = t.y - 30;
-    c.font = '700 12px "Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif';
+    const y = t.y - 22 - 8 * ls;
+    c.font = `700 ${12 * ls}px "Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif`;
     c.textAlign = 'center';
-    c.lineWidth = 3;
+    c.lineWidth = 3 * ls;
     c.strokeStyle = 'rgba(0,0,0,0.75)';
     c.strokeText(t.name, t.x, y);
     c.fillStyle = isMe ? '#ffe28a' : teamColor || '#ffffff';
     c.fillText(t.name, t.x, y);
-    const w = 34, hp = Math.max(0, t.hp) / C.MAX_HP;
+    const w = 34 * Math.min(ls, 1.5), bh = 4 * ls, hp = Math.max(0, t.hp) / C.MAX_HP;
     c.fillStyle = 'rgba(0,0,0,0.6)';
-    c.fillRect(t.x - w / 2 - 1, y + 4, w + 2, 6);
+    c.fillRect(t.x - w / 2 - 1, y + 4, w + 2, bh + 2);
     c.fillStyle = hp > 0.6 ? '#5cff6e' : hp > 0.3 ? '#ffd84d' : '#ff4d4d';
-    c.fillRect(t.x - w / 2, y + 5, w * hp, 4);
+    c.fillRect(t.x - w / 2, y + 5, w * hp, bh);
     if (t.shield > 0) {
       c.fillStyle = '#7fe3ff';
-      c.fillRect(t.x - w / 2, y + 5, w * Math.min(1, t.shield / 60), 1.5);
+      c.fillRect(t.x - w / 2, y + 5, w * Math.min(1, t.shield / 60), bh * 0.4);
     }
   }
 
   function drawBubble(c, x, y, text, a) {
     c.save();
     c.globalAlpha = a;
+    c.translate(x, y);
+    c.scale(ls, ls);
+    c.translate(0, 24 - 24 / ls);
     c.font = '700 13px "Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif';
     const w = c.measureText(text).width + 14;
     c.fillStyle = 'rgba(255,255,255,0.95)';
-    rr(c, x - w / 2, y - 58, w, 22, 8); c.fill();
-    c.beginPath(); c.moveTo(x - 5, y - 37); c.lineTo(x + 5, y - 37); c.lineTo(x, y - 31); c.fill();
+    rr(c, -w / 2, -58, w, 22, 8); c.fill();
+    c.beginPath(); c.moveTo(-5, -37); c.lineTo(5, -37); c.lineTo(0, -31); c.fill();
     c.fillStyle = '#111';
     c.textAlign = 'center';
-    c.fillText(text, x, y - 42);
+    c.fillText(text, 0, -42);
     c.restore();
   }
 
@@ -680,7 +685,7 @@ const Render = (() => {
       const k = f.life / f.max;
       f.y -= 32 * dt;
       c.globalAlpha = Math.min(1, k * 2);
-      c.font = `900 ${f.size * (1 + (1 - k) * 0.15)}px "Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif`;
+      c.font = `900 ${f.size * ls * (1 + (1 - k) * 0.15)}px "Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif`;
       c.textAlign = 'center';
       c.lineWidth = 3.5; c.strokeStyle = 'rgba(0,0,0,0.8)';
       c.strokeText(f.text, f.x, f.y);
@@ -721,13 +726,13 @@ const Render = (() => {
   function drawAim(c, aim, dt) {
     hitMarker = Math.max(0, hitMarker - dt);
     const { x, y, from, ammo, ammoT, maxAmmo, rail, rapid } = aim;
-    if (from) {
+    if (from && !aim.noLine) {
       const a = Math.atan2(y - from.y, x - from.x);
       const res = Core.castRay(map, from.x, from.y, a, 1400, 1, false);
       c.save();
-      c.setLineDash([4, 7]);
-      c.lineWidth = 1.5;
-      c.strokeStyle = rail ? 'rgba(255,110,199,0.35)' : 'rgba(255,255,255,0.16)';
+      c.setLineDash([4 * ls, 7 * ls]);
+      c.lineWidth = 1.5 * ls;
+      c.strokeStyle = rail ? 'rgba(255,110,199,0.45)' : touchMode ? 'rgba(255,220,150,0.55)' : 'rgba(255,255,255,0.16)';
       c.beginPath();
       const p0 = res.pts[0], p1 = res.pts[1];
       c.moveTo(p0[0] + Math.cos(a) * 26, p0[1] + Math.sin(a) * 26);
@@ -748,15 +753,21 @@ const Render = (() => {
       }
       c.restore();
     }
-    // 準星（外圈顯示彈藥）
+    // 準星（外圈顯示彈藥）；手機版把彈藥圈畫在自己坦克周圍
     c.save();
-    c.translate(x, y);
-    c.lineWidth = 2;
-    c.strokeStyle = hitMarker > 0 ? '#ff4d4d' : '#ffffff';
-    c.beginPath();
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { c.moveTo(dx * 4, dy * 4); c.lineTo(dx * 9, dy * 9); }
-    c.stroke();
-    if (hitMarker > 0) {
+    if (aim.ringOnly) {
+      if (!from) { c.restore(); return; }
+      c.translate(from.x, from.y);
+      c.scale(1.7, 1.7);
+    } else c.translate(x, y);
+    if (!aim.ringOnly) {
+      c.lineWidth = 2;
+      c.strokeStyle = hitMarker > 0 ? '#ff4d4d' : '#ffffff';
+      c.beginPath();
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { c.moveTo(dx * 4, dy * 4); c.lineTo(dx * 9, dy * 9); }
+      c.stroke();
+    }
+    if (hitMarker > 0 && !aim.ringOnly) {
       c.lineWidth = 2.5;
       c.beginPath();
       for (const [dx, dy] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) { c.moveTo(dx * 6, dy * 6); c.lineTo(dx * 13, dy * 13); }
@@ -779,5 +790,7 @@ const Render = (() => {
     c.restore();
   }
 
-  return { init, resize, setMap, tileChanged, frame, toWorld, fx, view, PU_COLOR, get map() { return map; } };
+  function setTouch(on) { touchMode = on; layout(); }
+
+  return { init, resize, setMap, setTouch, tileChanged, frame, toWorld, fx, view, PU_COLOR, get map() { return map; } };
 })();

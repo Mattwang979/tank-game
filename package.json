@@ -1,17 +1,22 @@
 {
   "name": "tank-brawl",
   "version": "1.0.0",
-  "description": "坦克大亂鬥 — 多人連線坦克對戰（區網 / 網路）",
+  "description": "坦克大亂鬥 — 多人連線坦克對戰（手機/電腦，開連結就能玩）",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "test": "node test/map-check.js && node test/sim-test.js"
+    "test": "node test/map-check.js && node test/sim-test.js",
+    "build": "node scripts/build-static.js"
   },
   "engines": {
     "node": ">=16"
   },
   "license": "MIT",
   "dependencies": {
+    "peerjs": "^1.5.5",
     "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "peer": "^1.0.2"
   }
 }
