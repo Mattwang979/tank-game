@@ -115,7 +115,7 @@ const Touch = (() => {
       if (sa > 0.38) k |= K.DOWN;
       if (sa < -0.38) k |= K.UP;
     }
-    // 拿到狂暴連射時，按住瞄準搖桿就會一直開火
+    // 拿到狂暴連射或火焰噴射時，按住瞄準搖桿就會一直開火
     if (S.aim && S.aim.max > AIM_DEAD && S.rapid() && performance.now() - S.aim.t0 > 250) k |= K.FIRE;
     k |= S.latch;
     S.latch = 0;

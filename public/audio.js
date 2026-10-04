@@ -148,6 +148,49 @@ const Sfx = (() => {
     taunt(x, y) { tone({ type: 'triangle', f0: 880, f1: 1320, dur: 0.1, vol: 0.1, dest: out(x, y) }); },
     tick() { tone({ type: 'square', f0: 1000, dur: 0.05, vol: 0.06 }); },
     fizzle(x, y) { noise({ dur: 0.12, vol: 0.08, type: 'highpass', f0: 2000, dest: out(x, y) }); },
+
+    // ---- 新武器
+    missile(x, y) {
+      const d = out(x, y);
+      noise({ dur: 0.45, vol: 0.35, type: 'bandpass', f0: 400, f1: 2600, q: 1.2, dest: d });
+      tone({ type: 'sawtooth', f0: 90, f1: 160, dur: 0.3, vol: 0.12, dest: d, filter: 900 });
+    },
+    shotgun(x, y) {
+      const d = out(x, y);
+      noise({ dur: 0.28, vol: 0.8, type: 'lowpass', f0: 3200, f1: 300, q: 0.6, dest: d });
+      tone({ type: 'square', f0: 160, f1: 40, dur: 0.18, vol: 0.3, dest: d, filter: 900 });
+    },
+    flame(x, y) { noise({ dur: 0.16, vol: 0.22, type: 'bandpass', f0: 700 + Math.random() * 500, q: 0.7, dest: out(x, y) }); },
+    cloak(x, y) { tone({ type: 'sine', f0: 1800, f1: 300, dur: 0.4, vol: 0.12, dest: out(x, y) }); },
+    // ---- 地形
+    port(x, y) {
+      const d = out(x, y);
+      tone({ type: 'sine', f0: 300, f1: 1800, dur: 0.18, vol: 0.18, dest: d });
+      tone({ type: 'triangle', f0: 1800, f1: 400, dur: 0.22, vol: 0.12, at: 0.12, dest: d });
+    },
+    pad(x, y) { noise({ dur: 0.25, vol: 0.22, type: 'bandpass', f0: 500, f1: 3500, q: 2, dest: out(x, y) }); },
+    // ---- 模式
+    flagTake() { [523, 659, 784, 1047].forEach((f, i) => tone({ type: 'square', f0: f, dur: 0.1, vol: 0.08, at: i * 0.07, filter: 3000 })); },
+    flagDrop() { [784, 523].forEach((f, i) => tone({ type: 'triangle', f0: f, dur: 0.16, vol: 0.12, at: i * 0.1 })); },
+    flagRet() { [659, 988].forEach((f, i) => tone({ type: 'triangle', f0: f, dur: 0.14, vol: 0.12, at: i * 0.08 })); },
+    flagCap() {
+      [523, 659, 784, 1047, 1319].forEach((f, i) => tone({ type: 'sawtooth', f0: f, dur: 0.2, vol: 0.09, at: i * 0.08, filter: 3500 }));
+      noise({ dur: 0.8, vol: 0.18, type: 'highpass', f0: 5000, at: 0.3 });
+    },
+    horn() {
+      tone({ type: 'sawtooth', f0: 220, dur: 0.5, vol: 0.12, filter: 1400, attack: 0.05 });
+      tone({ type: 'sawtooth', f0: 330, dur: 0.5, vol: 0.1, filter: 1400, attack: 0.05 });
+    },
+    siren() { tone({ type: 'sawtooth', f0: 500, f1: 900, dur: 0.5, vol: 0.08, filter: 2000 }); tone({ type: 'sawtooth', f0: 900, f1: 500, dur: 0.5, vol: 0.08, at: 0.5, filter: 2000 }); },
+    boss() {
+      tone({ type: 'sawtooth', f0: 70, f1: 45, dur: 1.4, vol: 0.3, filter: 600, attack: 0.1 });
+      noise({ dur: 1.2, vol: 0.25, type: 'lowpass', f0: 400, f1: 80, attack: 0.2 });
+    },
+    levelUp() {
+      [523, 659, 784, 1047].forEach((f, i) => tone({ type: 'square', f0: f, dur: 0.14, vol: 0.09, at: i * 0.09, filter: 4000 }));
+      [1047, 1319, 1568].forEach((f) => tone({ type: 'triangle', f0: f, dur: 0.7, vol: 0.08, at: 0.4 }));
+    },
+    ach() { [1319, 1760, 2093].forEach((f, i) => tone({ type: 'sine', f0: f, dur: 0.25, vol: 0.1, at: i * 0.07 })); },
   };
 
   // ---------------- 背景音樂：E 小調硬派鼓組 + 貝斯 + 琶音

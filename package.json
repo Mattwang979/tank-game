@@ -1,11 +1,11 @@
 {
   "name": "tank-brawl",
-  "version": "1.0.0",
-  "description": "坦克大亂鬥 — 多人連線坦克對戰（手機/電腦，開連結就能玩）",
+  "version": "2.0.0",
+  "description": "坦克大亂鬥 — 多人連線坦克對戰（手機/電腦，開連結就能玩；6 種模式、單人闖關、成長系統）",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "test": "node test/map-check.js && node test/sim-test.js",
+    "test": "node test/map-check.js && node test/sim-test.js && node test/predict-test.js",
     "build": "node scripts/build-static.js"
   },
   "engines": {

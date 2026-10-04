@@ -3,7 +3,8 @@
  *  - ws  ：連到 Node 伺服器（npm start 的區網模式）
  *  - p2p ：不用伺服器。第一個進房間的人的瀏覽器就是房主，直接跑遊戲模擬；
  *          其他人用 WebRTC（PeerJS）直接連到房主。網頁可以放在 GitHub Pages 這種靜態空間。
- * 兩種模式對 main.js 提供同樣的介面：send(obj)、handlers.onOpen / onMessage / onClose / onStatus
+ *  - local：單人模式，不連網路，自己的瀏覽器跑模擬（打電腦）
+ * 三種模式對 main.js 提供同樣的介面：send(obj)、handlers.onOpen / onMessage / onClose / onStatus
  */
 const Net = (() => {
   const PREFIX = 'tankbrawl-v1-';
@@ -119,6 +120,25 @@ const Net = (() => {
     return api;
   }
 
+  // 單人模式：完全不用網路，自己的瀏覽器跑模擬，自己連自己
+  function local(room, h) {
+    const api = { role: 'host', local: true, send() {} };
+    setTimeout(() => {
+      const game = new TBGame.Room(room);
+      startLoop(game);
+      if (/[?&]debug\b/.test(location.search)) window.__room = game; // 測試用
+      const sock = {
+        readyState: 1, bufferedAmount: 0,
+        send(s) { try { h.onMessage(JSON.parse(s)); } catch (err) { console.error(err); } },
+      };
+      const me = TBGame.createClient(sock, () => game, () => ({ host: true, local: true }));
+      api.send = (o) => me.message(o);
+      api.peerCount = () => 1;
+      h.onOpen();
+    }, 0);
+    return api;
+  }
+
   function startLoop(game) {
     const DT = Core.C.DT;
     let last = performance.now(), acc = 0;
@@ -136,6 +156,9 @@ const Net = (() => {
 
   return {
     mode,
-    connect(room, handlers) { return mode() === 'ws' ? ws(room, handlers) : p2p(room, handlers); },
+    connect(room, handlers, opts) {
+      if (opts && opts.local) return local(room, handlers);
+      return mode() === 'ws' ? ws(room, handlers) : p2p(room, handlers);
+    },
   };
 })();
