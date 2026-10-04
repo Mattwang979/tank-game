@@ -1,5 +1,6 @@
 /*
- * 電腦玩家：BFS 尋路、走位繞圈、預判射擊、閃避砲彈、埋地雷；困難難度會算反彈射擊。
+ * 電腦玩家：BFS 尋路（會走傳送門）、走位繞圈、預判射擊、閃避砲彈、埋地雷；困難難度會算反彈射擊。
+ * 會用特殊武器，也會玩搶旗、佔山頭、躲毒圈。
  * 輸出和真人一樣的輸入（按鍵 + 瞄準角度），不作弊移動。
  */
 (function (root, factory) {
@@ -15,6 +16,7 @@
     easy: { aimErr: 0.2, react: 0.6, dodge: 0.15, turn: 4, bank: false, mine: 0.05, fire: 0.5 },
     normal: { aimErr: 0.09, react: 0.35, dodge: 0.45, turn: 7, bank: false, mine: 0.1, fire: 0.8 },
     hard: { aimErr: 0.035, react: 0.18, dodge: 0.8, turn: 12, bank: true, mine: 0.16, fire: 1 },
+    boss: { aimErr: 0.06, react: 0.25, dodge: 0, turn: 5, bank: true, mine: 0.3, fire: 1 },
   };
 
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
@@ -29,7 +31,9 @@
     while (head < q.length) {
       const i = q[head++];
       if (i === goal) break;
-      const x = i % w, y = (i / w) | 0;
+      let x = i % w, y = (i / w) | 0;
+      // 踩進傳送門會被傳到對面，所以從對面那格繼續往外找
+      if (i !== start && map.tiles[i] === T.PORTAL) [x, y] = Core.portalPartner(map, x, y);
       for (const [dx, dy] of DIRS) {
         const nx = x + dx, ny = y + dy;
         if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
@@ -65,36 +69,100 @@
       this.dodged = new Set(); this.dodgeT = 0; this.dodgeX = 0; this.dodgeY = 0;
       this.mineT = 2 + Math.random() * 3;
       this.brick = null; this.roam = null;
+      this.role = 'att';
+      this.spot = null; this.spotT = 0;
+      this.px = null; this.py = null;
+    }
+
+    // 模式目標：回傳 { x, y, urgent }，urgent 代表就算有敵人也先去目標
+    objective(room, p, dt) {
+      const o = room.obj;
+      if (!o) return null;
+      const mode = room.settings.mode;
+      const near = (x, y, r) => {
+        this.spotT -= dt;
+        if (!this.spot || this.spotT <= 0 || Math.hypot(this.spot.x - p.x, this.spot.y - p.y) < 24) {
+          this.spotT = 1.5 + Math.random() * 2;
+          for (let i = 0; i < 12; i++) {
+            const a = Math.random() * Math.PI * 2, d = Math.random() * r;
+            const sx = x + Math.cos(a) * d, sy = y + Math.sin(a) * d;
+            if (!Core.blocksTank(Core.tileAt(room.map, Math.floor(sx / TILE), Math.floor(sy / TILE)))) { this.spot = { x: sx, y: sy }; break; }
+          }
+          if (!this.spot) this.spot = { x, y };
+        }
+        return this.spot;
+      };
+      if (mode === 'ctf') {
+        // 角色按隊伍分配，避免整隊電腦都留守（以前各自隨機，約 6% 的場次整隊都在家）
+        const mates = [...room.players.values()].filter((q) => q.bot && q.team === p.team).sort((a, b) => a.id - b.id);
+        this.role = mates.indexOf(p) >= mates.length - Math.floor(mates.length / 3) ? 'def' : 'att';
+        const mine = o.flags[p.team], theirs = o.flags[1 - p.team];
+        if (p.carry >= 0) return { x: mine.hx, y: mine.hy, urgent: true };
+        if (mine.st === 2) return { x: mine.x, y: mine.y, urgent: true };
+        if (mine.st === 1) { const c = room.players.get(mine.by); if (c) return { x: c.x, y: c.y }; }
+        if (theirs.st === 2 && Math.hypot(theirs.x - p.x, theirs.y - p.y) < 520) return { x: theirs.x, y: theirs.y, urgent: true };
+        if (this.role === 'att') {
+          if (theirs.st === 1) { const c = room.players.get(theirs.by); if (c) return { x: c.x, y: c.y }; }
+          // 已經摸到敵方旗座附近就不要戀戰，直接搶
+          return { x: theirs.x, y: theirs.y, urgent: Math.hypot(theirs.x - p.x, theirs.y - p.y) < 280 };
+        }
+        return near(mine.hx, mine.hy, 110);
+      }
+      if (mode === 'koth') {
+        const inside = Math.hypot(p.x - o.x, p.y - o.y) < o.r * 0.8;
+        if (!inside) return { x: o.x, y: o.y, urgent: Math.hypot(p.x - o.x, p.y - o.y) < o.r * 2.2 };
+        return Object.assign({ urgent: true }, near(o.x, o.y, o.r * 0.55));
+      }
+      if (mode === 'br' && o.z) {
+        const z = o.z;
+        const dz = Math.hypot(p.x - z.cx, p.y - z.cy);
+        if (dz > z.r - 50) return { x: z.cx, y: z.cy, urgent: true };
+        if (z.phase !== 'done' && z.tr > 0 && z.t < 7 && Math.hypot(p.x - z.tx, p.y - z.ty) > z.tr - 40) return { x: z.tx, y: z.ty, urgent: z.phase === 'shrink' || z.t < 3 };
+      }
+      return null;
     }
 
     think(room, p, dt) {
       const cfg = this.cfg, map = room.map;
-      const team = room.settings.mode === 'team';
+      const team = room.isTeam();
+      const mode = room.settings.mode;
       if (this.aim === null) this.aim = p.ta;
+      // 被傳送門或爆炸推走了就重新找路
+      if (this.px !== null && Math.hypot(p.x - this.px, p.y - this.py) > 60) this.path = null;
+      this.px = p.x; this.py = p.y;
       let k = 0;
 
       // ---- 選目標
       let tgt = null, best = Infinity;
+      const hill = mode === 'koth' ? room.obj : null;
       for (const q of room.players.values()) {
         if (!q.alive || q === p || (team && q.team === p.team)) continue;
         const d = Math.hypot(q.x - p.x, q.y - p.y);
-        if (q.inBush && q.revealT <= 0 && d > C.BUSH_SEE) continue;
-        const s = d * (Core.lineClear(map, p.x, p.y, q.x, q.y) ? 0.6 : 1) * (q.protectT > 0 ? 3 : 1);
+        if (room.hidden(q) && d > C.BUSH_SEE) continue;
+        let s = d * (Core.lineClear(map, p.x, p.y, q.x, q.y) ? 0.6 : 1) * (q.protectT > 0 ? 3 : 1);
+        if (q.carry >= 0) s *= 0.4;
+        if (hill && Math.hypot(q.x - hill.x, q.y - hill.y) < hill.r) s *= 0.6;
         if (s < best) { best = s; tgt = q; }
       }
       if (tgt !== this.target) { this.target = tgt; this.seenT = 0; }
       const los = !!tgt && Core.lineClear(map, p.x, p.y, tgt.x, tgt.y);
       this.seenT = los ? this.seenT + dt : 0;
       const d = tgt ? Math.hypot(tgt.x - p.x, tgt.y - p.y) : Infinity;
+      const sp = p.special;
+      const close = sp === 'shotgun' || sp === 'flame';
 
       // ---- 目的地
-      let goal = null, pu = null, pd = Infinity;
+      let pu = null, pd = Infinity;
       for (const u of room.powerups) {
         const ud = Math.hypot(u.x - p.x, u.y - p.y);
-        const want = (p.hp < 55 && (u.k === 'heal' || u.k === 'shield')) ? ud * 0.4 : ud;
+        const want = (p.hp < p.maxHp * 0.55 && (u.k === 'heal' || u.k === 'shield')) ? ud * 0.4 : ud;
         if (want < pd) { pd = want; pu = u; }
       }
-      if (pu && pd < 300) goal = pu;
+      const obj = this.objective(room, p, dt);
+      let goal;
+      if (obj && obj.urgent) goal = obj;
+      else if (pu && pd < (obj ? 220 : 300)) goal = pu;
+      else if (obj) goal = tgt && los && d < 340 ? tgt : obj;
       else if (tgt) goal = tgt;
       else {
         if (!this.roam || Math.hypot(this.roam.x - p.x, this.roam.y - p.y) < 30) {
@@ -112,7 +180,8 @@
         this.strafeT -= dt;
         if (this.strafeT <= 0) { this.strafe *= -1; this.strafeT = 0.6 + Math.random() * 1.4; }
         mx = -ay * this.strafe; my = ax * this.strafe;
-        const rr = d < 200 ? -0.9 : d > 340 ? 0.8 : 0;
+        // 霰彈和火焰要貼近打，其他武器保持距離
+        const rr = close ? (d > 130 ? 1.1 : d < 60 ? -0.5 : 0.2) : d < 200 ? -0.9 : d > 340 ? 0.8 : 0;
         mx += ax * rr; my += ay * rr;
       } else {
         const wp = this.nextWaypoint(map, p, goal, dt);
@@ -140,7 +209,7 @@
         const t = (rx * b.vx + ry * b.vy) / v2;
         if (t < 0 || t > 0.55) continue;
         const cx = b.x + b.vx * t - p.x, cy = b.y + b.vy * t - p.y;
-        if (Math.hypot(cx, cy) > C.TANK_R + 10) continue;
+        if (Math.hypot(cx, cy) > p.r + (b.kind === 2 ? 30 : 10)) continue;
         this.dodged.add(b.id);
         if (Math.random() > cfg.dodge) continue;
         let px = -b.vy, py = b.vx;
@@ -172,39 +241,45 @@
         if (sa > 0.38) k |= K.DOWN;
         if (sa < -0.38) k |= K.UP;
       }
+      // 扛旗被追的時候衝刺
+      if (p.carry >= 0 && tgt && d < 260 && p.dashCd <= 0 && Math.random() < 0.03) k |= K.DASH;
 
       // ---- 瞄準與開火
       this.errT -= dt;
       if (this.errT <= 0) { this.errT = 0.4; this.err = (Math.random() * 2 - 1) * cfg.aimErr; }
-      let desired = null, canFire = false;
+      let desired = null, canFire = false, tol = 0.08;
+      const range = sp === 'shotgun' ? 200 : sp === 'flame' ? 150 : sp === 'homing' ? 560 : 700;
       if (los) {
-        const tt = d / C.BULLET_SPEED;
+        const spd = sp === 'homing' ? C.MISSILE_SPEED : C.BULLET_SPEED;
+        const tt = sp === 'flame' || sp === 'rail' ? 0 : d / spd;
         const lx = tgt.x + (tgt.vx || 0) * tt * 0.9, ly = tgt.y + (tgt.vy || 0) * tt * 0.9;
         desired = Math.atan2(ly - p.y, lx - p.x) + this.err;
-        canFire = this.seenT > cfg.react && d < 700 && tgt.protectT <= 0;
+        canFire = this.seenT > cfg.react && d < range && tgt.protectT <= 0;
+        if (close || sp === 'homing') tol = 0.3;
         this.bank = null;
-      } else if (cfg.bank && tgt && d < 760) {
+      } else if (cfg.bank && tgt && d < 760 && (!sp || sp === 'rail')) {
         this.bankT -= dt;
         if (this.bankT <= 0) { this.bankT = 0.35; this.bank = this.findBank(map, p, tgt); }
         if (this.bank !== null) { desired = this.bank; canFire = tgt.protectT <= 0; }
       }
       if (desired === null) {
-        if (this.brick) { desired = Math.atan2(this.brick.y - p.y, this.brick.x - p.x); canFire = true; }
+        if (this.brick && !sp) { desired = Math.atan2(this.brick.y - p.y, this.brick.x - p.x); canFire = true; }
         else if (ml > 0.01) desired = Math.atan2(my, mx);
       }
       if (desired !== null) {
         const diff = Core.angDiff(desired, this.aim), mr = cfg.turn * dt;
         this.aim = Core.wrapAngle(this.aim + Core.clamp(diff, -mr, mr));
-        if (canFire && Math.abs(Core.angDiff(desired, this.aim)) < 0.08 && Math.random() < cfg.fire) k |= K.FIRE;
+        if (canFire && Math.abs(Core.angDiff(desired, this.aim)) < tol && (sp === 'flame' || Math.random() < cfg.fire)) k |= K.FIRE;
       }
-      if (p.ammo < 1 && p.railAmmo <= 0 && p.rapidT <= 0) k &= ~K.FIRE;
+      if (p.ammo < 1 && !sp && p.rapidT <= 0) k &= ~K.FIRE;
 
-      // ---- 地雷
+      // ---- 地雷（守旗的會在旗子附近埋）
       this.mineT -= dt;
       if (this.mineT <= 0) {
         this.mineT = 1;
+        const guarding = mode === 'ctf' && room.obj && this.role === 'def' && Math.hypot(p.x - room.obj.flags[p.team].hx, p.y - room.obj.flags[p.team].hy) < 140;
         if (p.mineAmmo > 0 && tgt && d < 240 && Math.random() < cfg.mine * 4) k |= K.MINE;
-        else if (p.mineAmmo >= 2 && Math.random() < cfg.mine) k |= K.MINE;
+        else if (p.mineAmmo >= (guarding ? 1 : 2) && Math.random() < cfg.mine * (guarding ? 3 : 1)) k |= K.MINE;
       }
 
       return { s: ++this.seq, k, a: this.aim };
@@ -213,7 +288,7 @@
     nextWaypoint(map, p, goal, dt) {
       if (!goal) return null;
       const sx = Math.floor(p.x / TILE), sy = Math.floor(p.y / TILE);
-      const gx = Math.floor(goal.x / TILE), gy = Math.floor(goal.y / TILE);
+      const gx = Core.clamp(Math.floor(goal.x / TILE), 0, map.w - 1), gy = Core.clamp(Math.floor(goal.y / TILE), 0, map.h - 1);
       const key = gx + ',' + gy;
       this.pathT -= dt;
       if (!this.path || this.pathT <= 0 || key !== this.goalKey) {
