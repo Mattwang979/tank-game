@@ -2,7 +2,8 @@
  * 手機觸控操作：
  *  左半邊：移動搖桿（手指按哪裡，搖桿就出現在哪裡）
  *  右半邊：瞄準搖桿，拖曳瞄準、放開開砲；輕點一下 = 自動瞄準最近的敵人開砲
- *  按鈕：💣 地雷、⚡ 衝刺
+ *          自走砲：拖得越遠打得越遠（搖桿的距離 = 射程）
+ *  按鈕：💣 地雷、⚡ 衝刺、📡 呼叫空襲（有空襲的時候才會出現）
  */
 const Touch = (() => {
   const { K } = Core;
@@ -13,8 +14,8 @@ const Touch = (() => {
   const S = {
     enabled: false,
     move: null, aim: null,
-    aimAngle: 0, latch: 0,
-    autoAim: null,  // main.js 提供：() => 角度或 null
+    aimAngle: 0, aimMag: 0.6, tapDist: null, latch: 0,
+    autoAim: null,  // main.js 提供：() => { a: 角度, d: 距離 } 或 null
     rapid: () => false,
   };
   const $ = (id) => document.getElementById(id);
@@ -73,7 +74,7 @@ const Touch = (() => {
       } else if (S.aim && e.pointerId === S.aim.id) {
         Object.assign(S.aim, vec(S.aim, e));
         S.aim.max = Math.max(S.aim.max, S.aim.mag);
-        if (S.aim.mag > AIM_DEAD) S.aimAngle = Math.atan2(S.aim.dy, S.aim.dx);
+        if (S.aim.mag > AIM_DEAD) { S.aimAngle = Math.atan2(S.aim.dy, S.aim.dx); S.aimMag = S.aim.mag; S.tapDist = null; }
         moveKnob(Rs, S.aim.dx, S.aim.dy);
       }
     });
@@ -88,11 +89,12 @@ const Touch = (() => {
         resetStick(Rs);
         if (e.type === 'pointercancel') return;
         if (a.max > AIM_DEAD) {
-          if (a.mag > AIM_DEAD * 0.5) S.aimAngle = Math.atan2(a.dy, a.dx);
+          if (a.mag > AIM_DEAD * 0.5) { S.aimAngle = Math.atan2(a.dy, a.dx); S.aimMag = Math.max(a.mag, AIM_DEAD); }
+          S.tapDist = null;
           S.latch |= K.FIRE;
         } else {
-          const ang = S.autoAim ? S.autoAim() : null;
-          if (ang !== null) S.aimAngle = ang;
+          const r = S.autoAim ? S.autoAim() : null;
+          if (r) { S.aimAngle = r.a; S.tapDist = r.d; }
           S.latch |= K.FIRE;
         }
       }
@@ -103,6 +105,7 @@ const Touch = (() => {
     const btn = (id, fn) => $(id).addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); Sfx.init(); fn(); });
     btn('btnMine', () => (S.latch |= K.MINE));
     btn('btnDash', () => (S.latch |= K.DASH));
+    btn('btnAir', () => (S.latch |= K.CALL));
   }
 
   function keys() {
@@ -129,6 +132,9 @@ const Touch = (() => {
     get enabled() { return S.enabled; },
     get aimAngle() { return S.aimAngle; },
     set aimAngle(v) { S.aimAngle = v; },
+    // 瞄準搖桿拉多遠（0~1，死區以下算最近）；輕點自動瞄準時改用 tapDist（到敵人的距離）
+    get aimMag() { return Math.max(0, (S.aimMag - AIM_DEAD) / (1 - AIM_DEAD)); },
+    get tapDist() { return S.tapDist; },
     get aiming() { return !!(S.aim && S.aim.max > AIM_DEAD); },
     set autoAim(fn) { S.autoAim = fn; },
     set rapid(fn) { S.rapid = fn; },

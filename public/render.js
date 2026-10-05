@@ -10,15 +10,25 @@ const Render = (() => {
   let groundCv = null, bushCv = null, decalCv = null, decalCtx = null, miniCv = null;
   let groundDirty = true, miniDirty = true, decalFadeT = 0, lastMiniH = -1;
   let waterTiles = [], portals = [], pads = [];
-  const particles = [], rings = [], beams = [], floaters = [], ghosts = [];
+  const particles = [], rings = [], beams = [], floaters = [], ghosts = [], planes = [];
   const treads = new Map();
   let shake = 0, hurtFlash = 0, hitMarker = 0, time = 0, killFlash = 0, goldFlash = 0;
   let touchMode = false, ls = 1; // ls：文字放大倍率（地圖縮很小時，名字和數字要放大才看得到）
+  // 小地圖：可以在選單關掉；有坦克開到小地圖底下時會變得更透明
+  let miniOn = true, miniFade = 0.6;
   const FONT = '"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif';
 
   const PU_COLOR = {
     heal: '#5cff6e', shield: '#7fe3ff', rapid: '#ffb142', triple: '#ffd84d', rail: '#ff6ec7', mines: '#ff5a3d', speed: '#4da6ff',
-    homing: '#9dff5c', shotgun: '#ffcf6e', flame: '#ff7a2e', cloak: '#b8a6ff', bounce: '#3dfcff',
+    homing: '#9dff5c', shotgun: '#ffcf6e', flame: '#ff7a2e', cloak: '#b8a6ff', bounce: '#3dfcff', supply: '#a3e635', crate: '#ffb300',
+  };
+  // 不同坦克種類的車身比例（整台還會再依半徑縮放）
+  const SHAPES = {
+    medium: { trk: 9, hull: [-15, -11, 30, 22], top: [-13, -9, 26, 18], tur: 10, bw: 6, bl: 20 },
+    heavy: { trk: 10, hull: [-16, -12, 32, 24], top: [-14, -10, 28, 20], tur: 11.5, bw: 8, bl: 21, skirt: true, brake: true },
+    light: { trk: 7, hull: [-14, -9.5, 28, 19], top: [-12, -7.5, 24, 15], tur: 7.5, bw: 4.5, bl: 18, antenna: true },
+    spg: { trk: 9, hull: [-15, -11, 30, 22], top: [-13, -9, 26, 18], tur: 0, bw: 9, bl: 13, box: true },
+    td: { trk: 8.5, hull: [-16, -10.5, 32, 21], top: [-14, -8.5, 28, 17], tur: 0, bw: 5, bl: 30, wedge: true, brake: true },
   };
   const TEAM_COLORS = ['#ff5252', '#448aff'];
   const PORTAL_COLORS = ['#b388ff', '#4dd0e1', '#ffca28', '#ff8a65'];
@@ -131,7 +141,7 @@ const Render = (() => {
     decalCv.width = W; decalCv.height = H;
     decalCtx = decalCv.getContext('2d');
     treads.clear();
-    particles.length = rings.length = beams.length = floaters.length = ghosts.length = 0;
+    particles.length = rings.length = beams.length = floaters.length = ghosts.length = planes.length = 0;
     // 傳送門配對上色、加速帶清單
     portals = []; pads = [];
     let pair = 0;
@@ -415,12 +425,13 @@ const Render = (() => {
   function floater(x, y, text, c, size) {
     floaters.push({ x: x + rand(-6, 6), y, text, c, life: 0.9, max: 0.9, size: size || 15 });
   }
+  // 火焰：粒子大約飛到 C.FLAME_RANGE（230px）那麼遠
   function flameBurst(x, y, a, n) {
     for (let i = 0; i < n; i++) {
-      const ang = a + (Math.random() - 0.5) * 0.62, sp = rand(240, 400);
-      P({ x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, life: rand(0.25, 0.42), r: rand(2.5, 4), r1: rand(11, 17), c: Math.random() < 0.5 ? 'rgba(255,150,40,0.75)' : 'rgba(255,220,90,0.7)', add: true, drag: 2.2 });
+      const ang = a + (Math.random() - 0.5) * 0.62, sp = rand(420, 620);
+      P({ x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, life: rand(0.42, 0.58), r: rand(2.5, 4), r1: rand(13, 21), c: Math.random() < 0.5 ? 'rgba(255,150,40,0.75)' : 'rgba(255,220,90,0.7)', add: true, drag: 1.6 });
     }
-    if (Math.random() < 0.35) P({ x: x + Math.cos(a) * 110, y: y + Math.sin(a) * 110, vx: Math.cos(a) * 60, vy: Math.sin(a) * 60, life: 0.6, r: 6, r1: 16, c: 'rgba(60,50,45,0.35)', drag: 1.5 });
+    if (Math.random() < 0.35) P({ x: x + Math.cos(a) * 170, y: y + Math.sin(a) * 170, vx: Math.cos(a) * 60, vy: Math.sin(a) * 60, life: 0.6, r: 7, r1: 19, c: 'rgba(60,50,45,0.35)', drag: 1.5 });
   }
 
   const fx = {
@@ -434,6 +445,29 @@ const Render = (() => {
         sparks(x, y, 14, '#ffd27a', 520, 0.2, a, 0.8);
         P({ x, y, vx: 0, vy: 0, life: 0.09, r: 20, r1: 5, c: 'rgba(255,230,160,0.95)', add: true });
         smoke(x + Math.cos(a) * 10, y + Math.sin(a) * 10, 6, 14, 0.6, 'rgba(140,140,140,0.35)');
+        return;
+      }
+      if (kind === 4) {
+        // 自走砲：往上拋射，大團砲口煙
+        P({ x, y, vx: 0, vy: 0, life: 0.12, r: 22, r1: 6, c: 'rgba(255,220,140,0.95)', add: true });
+        sparks(x, y, 10, '#ffcf7a', 300, 0.25, a, 1.2);
+        smoke(x, y, 9, 18, 1.1, 'rgba(150,145,140,0.4)');
+        rings.push({ x, y, r0: 6, r1: 34, life: 0.25, max: 0.25, c: '255,230,180', w: 3 });
+        shake = Math.min(22, shake + 1);
+        return;
+      }
+      if (kind === 5) {
+        // 驅逐戰車：細長的高速砲口焰
+        for (let i = 0; i < 3; i++) P({ x: x + Math.cos(a) * i * 9, y: y + Math.sin(a) * i * 9, vx: Math.cos(a) * 60, vy: Math.sin(a) * 60, life: 0.08, r: 11 - i * 3, r1: 2, c: 'rgba(210,245,255,0.95)', add: true });
+        sparks(x, y, 9, '#c8f4ff', 640, 0.16, a, 0.35);
+        smoke(x + Math.cos(a) * 8, y + Math.sin(a) * 8, 4, 10, 0.6, 'rgba(150,160,170,0.35)');
+        return;
+      }
+      if (kind === 6) {
+        // 重坦：大砲口焰、比較多煙
+        P({ x, y, vx: 0, vy: 0, life: 0.11, r: 19, r1: 5, c: 'rgba(255,225,150,0.95)', add: true });
+        sparks(x, y, 10, '#ffc46a', 400, 0.2, a, 0.7);
+        smoke(x + Math.cos(a) * 8, y + Math.sin(a) * 8, 6, 14, 0.8, 'rgba(110,105,100,0.4)');
         return;
       }
       sparks(x, y, kind ? 3 : 7, '#ffd27a', 380, 0.16, a, 0.6);
@@ -528,6 +562,14 @@ const Render = (() => {
     },
     ring(x, y, color, r) { rings.push({ x, y, r0: 8, r1: r || 60, life: 0.5, max: 0.5, c: hexRgb(color), w: 3 }); },
     cloak(x, y) { rings.push({ x, y, r0: 30, r1: 8, life: 0.4, max: 0.4, c: '184,166,255', w: 2 }); sparks(x, y, 12, '#b8a6ff', 180, 0.4); },
+    // 飛機飛過（k 0 運輸機丟空投、1 轟炸機）
+    plane(x0, y0, x1, y1, T, k) { planes.push({ x0, y0, x1, y1, T, life: T, k }); },
+    // 空投箱落地
+    land(x, y) {
+      rings.push({ x, y, r0: 6, r1: 44, life: 0.4, max: 0.4, c: '255,179,0', w: 3 });
+      smoke(x, y, 7, 16, 0.9, 'rgba(160,140,110,0.4)');
+      debris(x, y, 6, '#8a6a3a', 160);
+    },
     hurt(amount) { hurtFlash = Math.min(0.75, hurtFlash + 0.25 + amount / 140); shake = Math.min(22, shake + 3 + amount / 12); },
     hitMarker() { hitMarker = 0.18; },
     killConfirm() { killFlash = 0.35; },
@@ -606,6 +648,8 @@ const Render = (() => {
 
   function drawTank(c, t, alpha) {
     const sc = (t.r || C.TANK_R) / C.TANK_R;
+    const S_ = SHAPES[t.cls] || SHAPES.medium;
+    const [hx, hy, hw, hh] = S_.hull, [tx0, ty0, tw, th] = S_.top;
     let color = t.color;
     if (t.skin === 'rainbow' && !t.teamColor) color = hslHex((time * 90) % 360, 0.8, 0.55);
     c.save();
@@ -619,26 +663,46 @@ const Render = (() => {
       c.beginPath(); c.arc(0, 0, 27, 0, Math.PI * 2); c.fill();
     }
     c.rotate(t.ha);
+    // 履帶：比車身寬一點，長度比車身多 6px
+    const tk = S_.trk, outer = -hy + tk - 4, tl = hw + 6, tx = -tl / 2;
     c.fillStyle = '#17191c';
-    c.fillRect(-18, -16, 36, 9);
-    c.fillRect(-18, 7, 36, 9);
+    c.fillRect(tx, -outer, tl, tk);
+    c.fillRect(tx, outer - tk, tl, tk);
     c.fillStyle = '#3d424a';
     const off = ((t.dist || 0) % 6 + 6) % 6;
-    for (let i = -18 + off; i < 17; i += 6) { c.fillRect(i, -16, 2, 9); c.fillRect(i, 7, 2, 9); }
+    for (let i = tx + off; i < -tx - 1; i += 6) { c.fillRect(i, -outer, 2, tk); c.fillRect(i, outer - tk, 2, tk); }
+    if (S_.box) { c.fillStyle = '#25282c'; c.fillRect(hx - 4, -7, 4, 14); } // 自走砲車尾的駐鋤
     c.fillStyle = shade(color, -0.45);
-    rr(c, -15, -11, 30, 22, 4); c.fill();
+    rr(c, hx, hy, hw, hh, 4); c.fill();
+    if (S_.skirt) {
+      // 重坦：履帶外側的裙甲
+      c.fillStyle = shade(color, -0.55);
+      rr(c, -tl / 2 + 3, -outer - 0.5, tl - 6, 5, 1.5); c.fill();
+      rr(c, -tl / 2 + 3, outer - 4.5, tl - 6, 5, 1.5); c.fill();
+      c.fillStyle = 'rgba(255,255,255,0.18)';
+      for (let i = -12; i <= 12; i += 8) { c.fillRect(i, -outer + 1.5, 1.6, 1.6); c.fillRect(i, outer - 3, 1.6, 1.6); }
+    }
     c.fillStyle = color;
-    rr(c, -13, -9, 26, 18, 3); c.fill();
+    rr(c, tx0, ty0, tw, th, 3); c.fill();
     if (t.skin && t.skin !== 'classic') {
       c.save();
-      rr(c, -13, -9, 26, 18, 3); c.clip();
+      rr(c, tx0, ty0, tw, th, 3); c.clip();
+      if (tw !== 26 || th !== 18) c.scale(tw / 26, th / 18);
       paintSkin(c, t.teamColor && (t.skin === 'gold' || t.skin === 'rainbow') ? 'stripe' : t.skin, color);
       c.restore();
     }
     c.fillStyle = 'rgba(255,255,255,0.2)';
-    c.fillRect(-13, -9, 26, 3.5);
+    c.fillRect(tx0, ty0, tw, 3.5);
     c.fillStyle = 'rgba(0,0,0,0.25)';
-    c.fillRect(10, -7, 2, 14);
+    c.fillRect(tx0 + tw - 3, ty0 + 2, 2, th - 4);
+    if (S_.antenna) {
+      // 輕坦：車尾一根會晃的天線
+      const sway = Math.sin(time * 7 + (t.dist || 0) * 0.08) * 1.6;
+      c.strokeStyle = 'rgba(15,15,15,0.85)'; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(tx0 + 3, ty0 + 3); c.quadraticCurveTo(tx0 - 4, ty0 - 1 + sway * 0.5, tx0 - 9, ty0 - 3 + sway); c.stroke();
+      c.fillStyle = '#ff5252';
+      c.beginPath(); c.arc(tx0 - 9, ty0 - 3 + sway, 1.3, 0, Math.PI * 2); c.fill();
+    }
     // 扛旗：車尾插一支旗
     if (t.carry !== undefined && t.carry >= 0) {
       c.save(); c.rotate(-t.ha); drawFlagShape(c, -10, -8, TEAM_COLORS[t.carry], 0.8); c.restore();
@@ -647,26 +711,51 @@ const Render = (() => {
     const rc = t.recoil || 0;
     const bs = barrelStyle(t);
     const bc = bs.c || shade(color, -0.25);
+    const bw = S_.bw, bl = S_.bl, x0 = S_.box ? 5 : 4, xe = x0 + 1 + bl - rc;
     c.fillStyle = '#1e2124';
-    c.fillRect(4 - rc, -bs.w / 2 - 1.5, bs.len + 2, bs.w + 3);
+    c.fillRect(x0 - rc, -bw / 2 - 1.5, bl + 2, bw + 3);
     c.fillStyle = bc;
-    c.fillRect(5 - rc, -bs.w / 2, bs.len, bs.w);
+    c.fillRect(x0 + 1 - rc, -bw / 2, bl, bw);
     c.fillStyle = '#1e2124';
-    if (bs.wide) { c.beginPath(); c.moveTo(19 - rc, -6); c.lineTo(26 - rc, -8); c.lineTo(26 - rc, 8); c.lineTo(19 - rc, 6); c.closePath(); c.fill(); }
-    else if (bs.nozzle) { c.fillRect(20 - rc, -5, 6, 10); c.fillStyle = '#ffb35c'; c.fillRect(25 - rc, -2.5, 2, 5); }
-    else c.fillRect(3 + bs.len - rc, -5, 5, 10);
+    if (bs.wide) { c.beginPath(); c.moveTo(xe - 3, -6); c.lineTo(xe + 4, -8); c.lineTo(xe + 4, 8); c.lineTo(xe - 3, 6); c.closePath(); c.fill(); }
+    else if (bs.nozzle) { c.fillRect(xe - 4, -5, 6, 10); c.fillStyle = '#ffb35c'; c.fillRect(xe + 1, -2.5, 2, 5); }
+    else if (S_.brake) c.fillRect(xe - 3, -bw / 2 - 2.5, 5, bw + 5);
+    else if (S_.box) c.fillRect(xe - 3, -bw / 2 - 1.5, 4, bw + 3);
+    else c.fillRect(xe - 2, -bw / 2 - 2, 5, bw + 4);
     if (bs.pod) { c.fillStyle = '#d8ffd0'; c.beginPath(); c.arc(16 - rc, -6, 2.6, 0, Math.PI * 2); c.arc(16 - rc, 6, 2.6, 0, Math.PI * 2); c.fill(); }
     if (t.flags & 16) {
+      const l2 = Math.max(12, bl * 0.75);
       c.fillStyle = '#1e2124';
-      c.save(); c.rotate(-0.35); c.fillRect(6, -2, 15, 4); c.restore();
-      c.save(); c.rotate(0.35); c.fillRect(6, -2, 15, 4); c.restore();
+      c.save(); c.rotate(-0.35); c.fillRect(6, -2, l2, 4); c.restore();
+      c.save(); c.rotate(0.35); c.fillRect(6, -2, l2, 4); c.restore();
     }
-    c.fillStyle = shade(color, -0.35);
-    c.beginPath(); c.arc(0, 0, 10, 0, Math.PI * 2); c.fill();
-    c.fillStyle = t.skin === 'gold' && !t.teamColor ? '#e8c14a' : shade(color, 0.12);
-    c.beginPath(); c.arc(0, 0, 8, 0, Math.PI * 2); c.fill();
-    c.fillStyle = shade(color, -0.2);
-    c.beginPath(); c.arc(-2, 0, 3.2, 0, Math.PI * 2); c.fill();
+    const capC = t.skin === 'gold' && !t.teamColor ? '#e8c14a' : shade(color, 0.12);
+    if (S_.box) {
+      // 自走砲：方方正正的大砲塔
+      c.fillStyle = shade(color, -0.35);
+      rr(c, -12, -9, 19, 18, 2.5); c.fill();
+      c.fillStyle = capC;
+      rr(c, -10.5, -7.5, 16, 15, 2); c.fill();
+      c.fillStyle = shade(color, -0.2);
+      c.beginPath(); c.arc(-5, 2.5, 2.6, 0, Math.PI * 2); c.fill();
+      c.fillRect(-9, -6, 8, 2);
+    } else if (S_.wedge) {
+      // 驅逐戰車：低矮的楔形砲塔
+      c.fillStyle = shade(color, -0.35);
+      c.beginPath(); c.moveTo(-10, -8); c.lineTo(7, -5.5); c.lineTo(7, 5.5); c.lineTo(-10, 8); c.closePath(); c.fill();
+      c.fillStyle = capC;
+      c.beginPath(); c.moveTo(-8.5, -6.3); c.lineTo(5.5, -4.2); c.lineTo(5.5, 4.2); c.lineTo(-8.5, 6.3); c.closePath(); c.fill();
+      c.fillStyle = shade(color, -0.2);
+      c.beginPath(); c.arc(-4, 0, 2.4, 0, Math.PI * 2); c.fill();
+    } else {
+      const R = S_.tur;
+      c.fillStyle = shade(color, -0.35);
+      c.beginPath(); c.arc(0, 0, R, 0, Math.PI * 2); c.fill();
+      c.fillStyle = capC;
+      c.beginPath(); c.arc(0, 0, R - 2, 0, Math.PI * 2); c.fill();
+      c.fillStyle = shade(color, -0.2);
+      c.beginPath(); c.arc(-R * 0.2, 0, R * 0.32, 0, Math.PI * 2); c.fill();
+    }
     if (t.boss) {
       c.rotate(-t.ta);
       c.fillStyle = '#ffd84d';
@@ -726,11 +815,53 @@ const Render = (() => {
       case 'flame': c.moveTo(0, -9 * s); c.quadraticCurveTo(8 * s, 0, 4 * s, 8 * s); c.quadraticCurveTo(0, 4 * s, -4 * s, 8 * s); c.quadraticCurveTo(-8 * s, 0, 0, -9 * s); c.fill(); return;
       case 'cloak': c.arc(0, 0, 7 * s, 0, Math.PI * 2); c.setLineDash([3 * s, 3 * s]); c.stroke(); c.setLineDash([]); c.beginPath(); c.arc(-2.5 * s, -1 * s, 1.5 * s, 0, Math.PI * 2); c.arc(2.5 * s, -1 * s, 1.5 * s, 0, Math.PI * 2); c.fill(); return;
       case 'bounce': c.moveTo(-8 * s, -6 * s); c.lineTo(-2 * s, 6 * s); c.lineTo(3 * s, -4 * s); c.lineTo(8 * s, 5 * s); c.stroke(); return;
+      case 'supply':
+        // 補給包：十字 + 一排砲彈
+        c.fillRect(-1.8 * s, -8 * s, 3.6 * s, 9 * s); c.fillRect(-6 * s, -5.3 * s, 12 * s, 3.6 * s);
+        for (const x of [-6, -1.5, 3]) { c.fillRect(x * s, 3 * s, 3 * s, 5 * s); }
+        return;
     }
+  }
+
+  // 空投箱：木箱 + 黃色閃燈，比一般道具大
+  function drawCrate(c, x, y, s, beacon) {
+    c.save();
+    c.translate(x, y);
+    c.scale(s, s);
+    c.fillStyle = '#5a3d1c';
+    rr(c, -14, -14, 28, 28, 3); c.fill();
+    c.fillStyle = '#9c6b34';
+    rr(c, -12, -12, 24, 24, 2); c.fill();
+    c.strokeStyle = '#5a3d1c'; c.lineWidth = 3;
+    c.beginPath(); c.moveTo(-11, -11); c.lineTo(11, 11); c.moveTo(11, -11); c.lineTo(-11, 11); c.stroke();
+    c.fillStyle = '#ffb300';
+    c.fillRect(-14, -2.5, 28, 5);
+    c.fillStyle = '#1b1b1b';
+    c.font = `900 9px ${FONT}`; c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillText('✈', 0, 0.5);
+    if (beacon) {
+      const on = Math.sin(time * 9) > 0;
+      c.fillStyle = on ? '#fff3a0' : '#ff9f1a';
+      c.beginPath(); c.arc(0, -14, 3.4, 0, Math.PI * 2); c.fill();
+      if (on && hiQ) { c.fillStyle = 'rgba(255,220,80,0.35)'; c.beginPath(); c.arc(0, -14, 9, 0, Math.PI * 2); c.fill(); }
+    }
+    c.restore();
   }
 
   function drawPowerup(c, u) {
     const col = PU_COLOR[u.k] || '#fff';
+    if (u.k === 'crate') {
+      // 地上的空投：光柱 + 木箱
+      const k = 0.5 + Math.sin(time * 4 + u.id) * 0.2;
+      const gr = c.createRadialGradient(u.x, u.y, 4, u.x, u.y, 40);
+      gr.addColorStop(0, `rgba(255,179,0,${0.45 * k})`); gr.addColorStop(1, 'rgba(255,179,0,0)');
+      c.fillStyle = gr;
+      c.beginPath(); c.arc(u.x, u.y, 40, 0, Math.PI * 2); c.fill();
+      c.strokeStyle = `rgba(255,179,0,${0.5 * k})`; c.lineWidth = 2;
+      c.beginPath(); c.arc(u.x, u.y, 24 + Math.sin(time * 5) * 3, 0, Math.PI * 2); c.stroke();
+      drawCrate(c, u.x, u.y, 0.95, true);
+      return;
+    }
     const bob = Math.sin(time * 3 + u.id) * 2.5;
     c.save();
     c.translate(u.x, u.y + bob);
@@ -806,22 +937,27 @@ const Render = (() => {
       c.beginPath(); c.arc(b.x, b.y, 2, 0, Math.PI * 2); c.fill();
       return;
     }
-    const tl = b.kind === 1 ? 10 : 16;
-    const tx = b.x - ux * tl, ty = b.y - uy * tl;
+    // [尾巴長度, 尾巴粗細, 光暈半徑, 彈芯半徑]：1 連射、5 驅逐戰車穿甲彈（細長）、6 重坦大砲彈
+    const sz = b.kind === 1 ? [10, 3, 5, 2.4] : b.kind === 5 ? [32, 3.2, 6, 2.8] : b.kind === 6 ? [18, 6, 9.5, 4.4] : [16, 4.5, 7.5, 3.4];
+    const tx = b.x - ux * sz[0], ty = b.y - uy * sz[0];
     if (hiQ) {
       const gr = c.createLinearGradient(tx, ty, b.x, b.y);
       gr.addColorStop(0, rgba(color, 0));
       gr.addColorStop(1, rgba(color, 0.8));
       c.strokeStyle = gr;
     } else c.strokeStyle = rgba(color, 0.55);
-    c.lineWidth = b.kind === 1 ? 3 : 4.5;
+    c.lineWidth = sz[1];
     c.lineCap = 'round';
     c.beginPath(); c.moveTo(tx, ty); c.lineTo(b.x, b.y); c.stroke();
+    if (b.kind === 5) {
+      c.strokeStyle = 'rgba(230,251,255,0.85)'; c.lineWidth = 1.4;
+      c.beginPath(); c.moveTo(b.x - ux * 20, b.y - uy * 20); c.lineTo(b.x, b.y); c.stroke();
+    }
     c.fillStyle = rgba(color, 0.35);
-    c.beginPath(); c.arc(b.x, b.y, b.kind === 1 ? 5 : 7.5, 0, Math.PI * 2); c.fill();
-    if (theme.light) { c.fillStyle = 'rgba(0,0,0,0.55)'; c.beginPath(); c.arc(b.x, b.y, b.kind === 1 ? 3.4 : 4.6, 0, Math.PI * 2); c.fill(); }
-    c.fillStyle = b.bounces > 0 ? '#ffe2b0' : '#ffffff';
-    c.beginPath(); c.arc(b.x, b.y, b.kind === 1 ? 2.4 : 3.4, 0, Math.PI * 2); c.fill();
+    c.beginPath(); c.arc(b.x, b.y, sz[2], 0, Math.PI * 2); c.fill();
+    if (theme.light) { c.fillStyle = 'rgba(0,0,0,0.55)'; c.beginPath(); c.arc(b.x, b.y, sz[3] * 1.35, 0, Math.PI * 2); c.fill(); }
+    c.fillStyle = b.bounces > 0 ? '#ffe2b0' : b.kind === 5 ? '#e6fbff' : '#ffffff';
+    c.beginPath(); c.arc(b.x, b.y, sz[3], 0, Math.PI * 2); c.fill();
     if (b.maxB > 1) {
       c.strokeStyle = `rgba(61,252,255,${0.5 + Math.sin(time * 20) * 0.3})`; c.lineWidth = 1.4;
       c.beginPath(); c.arc(b.x, b.y, 7.5, 0, Math.PI * 2); c.stroke();
@@ -963,6 +1099,152 @@ const Render = (() => {
     c.restore();
   }
 
+  // ---------------------------------------------------------------- 自走砲砲彈、空襲炸彈、空投、飛機
+  // 拋物線最高點：飛越遠拋越高（只是畫面效果，模擬是直接算落地時間）
+  const arcH = (d) => Math.max(50, d * 0.42);
+  function shellPos(s, u) {
+    const h = arcH(Math.hypot(s.tx - s.x0, s.ty - s.y0)) * 4 * u * (1 - u);
+    return { gx: s.x0 + (s.tx - s.x0) * u, gy: s.y0 + (s.ty - s.y0) * u, h };
+  }
+
+  // 地上的落點警告圈（敵人的是紅色、自己和隊友的是橘色），畫在坦克底下
+  function drawShellsGround(c, shells) {
+    for (const s of shells) {
+      const u = Core.clamp(s.t / s.T, 0, 1);
+      const col = s.safe ? '255,177,66' : '255,60,50';
+      c.save();
+      c.fillStyle = `rgba(${col},${0.07 + u * 0.2})`;
+      c.beginPath(); c.arc(s.tx, s.ty, s.r, 0, Math.PI * 2); c.fill();
+      c.strokeStyle = `rgba(${col},${0.55 + u * 0.4})`;
+      c.lineWidth = 2;
+      c.setLineDash([7, 5]); c.lineDashOffset = -time * 24;
+      c.beginPath(); c.arc(s.tx, s.ty, s.r, 0, Math.PI * 2); c.stroke();
+      c.setLineDash([]);
+      // 內圈越縮越小 = 快落地了
+      c.lineWidth = 2.5;
+      c.beginPath(); c.arc(s.tx, s.ty, Math.max(2, s.r * (1 - u)), 0, Math.PI * 2); c.stroke();
+      if (s.kind === 1) { c.beginPath(); c.moveTo(s.tx - 9, s.ty); c.lineTo(s.tx + 9, s.ty); c.moveTo(s.tx, s.ty - 9); c.lineTo(s.tx, s.ty + 9); c.stroke(); }
+      // 影子
+      let sx = s.tx, sy = s.ty, sr = 3 + 7 * u;
+      if (s.kind === 0) { const p = shellPos(s, u); sx = p.gx; sy = p.gy; sr = 3.5 + 2.5 * u; }
+      c.fillStyle = `rgba(0,0,0,${0.18 + 0.25 * u})`;
+      c.beginPath(); c.ellipse(sx, sy, sr, sr * 0.7, 0, 0, Math.PI * 2); c.fill();
+      c.restore();
+    }
+  }
+
+  // 天上的砲彈 / 炸彈（畫在草叢上面）
+  function drawShellsAir(c, shells) {
+    for (const s of shells) {
+      const u = Core.clamp(s.t / s.T, 0, 1);
+      c.save();
+      if (s.kind === 0) {
+        const p = shellPos(s, u), p2 = shellPos(s, Math.min(1, u + 0.03));
+        const x = p.gx, y = p.gy - p.h;
+        if (Math.random() < (hiQ ? 0.6 : 0.25)) P({ x, y, vx: rand(-10, 10), vy: rand(-10, 10), life: 0.5, r: 2.5, r1: 7, c: 'rgba(200,200,200,0.3)', drag: 2 });
+        const k = 1 + p.h / 170; // 飛得越高看起來越大
+        c.translate(x, y);
+        c.rotate(Math.atan2(p2.gy - p2.h - y, p2.gx - x));
+        c.scale(k, k);
+        c.fillStyle = '#2b2b2b';
+        rr(c, -6, -3, 12, 6, 3); c.fill();
+        c.fillStyle = s.safe ? '#ffb142' : '#ff5a3d';
+        c.fillRect(2, -3, 3, 6);
+      } else {
+        // 炸彈從天上掉下來
+        const fall = (1 - u) * (1 - u) * 300;
+        c.translate(s.tx, s.ty - fall);
+        const k = 1.5 - u * 0.5;
+        c.scale(k, k);
+        c.fillStyle = '#26292e';
+        c.beginPath(); c.ellipse(0, 0, 4.5, 8, 0, 0, Math.PI * 2); c.fill();
+        c.fillRect(-5, -11, 10, 3);
+        c.fillStyle = s.safe ? '#ffb142' : '#ff5a3d';
+        c.fillRect(-4.5, -1, 9, 2);
+      }
+      c.restore();
+    }
+  }
+
+  // 空投：地上的落點標記（坦克底下）
+  function drawDropsGround(c, drops) {
+    for (const d of drops) {
+      const fall = Core.clamp(d.t / C.DROP_FALL, 0, 1);
+      const k = 0.5 + Math.sin(time * 5) * 0.25;
+      c.save();
+      c.strokeStyle = `rgba(255,179,0,${0.5 + k * 0.4})`; c.lineWidth = 2.5;
+      c.setLineDash([6, 6]); c.lineDashOffset = time * 20;
+      c.beginPath(); c.arc(d.x, d.y, 26, 0, Math.PI * 2); c.stroke();
+      c.setLineDash([]);
+      if (d.t <= C.DROP_FALL) {
+        const r = 6 + (1 - fall) * 10;
+        c.fillStyle = `rgba(0,0,0,${0.15 + (1 - fall) * 0.3})`;
+        c.beginPath(); c.ellipse(d.x, d.y, r, r * 0.7, 0, 0, Math.PI * 2); c.fill();
+      }
+      c.restore();
+    }
+  }
+
+  // 空投：掛著降落傘慢慢掉下來的箱子
+  function drawDropsAir(c, drops) {
+    for (const d of drops) {
+      if (d.t > C.DROP_FALL) continue; // 飛機還沒飛到
+      const fall = Core.clamp(d.t / C.DROP_FALL, 0, 1);
+      const x = d.x + Math.sin(time * 2 + d.id) * 6 * fall, y = d.y - fall * 240;
+      const s = 0.8 + fall * 0.35;
+      c.save();
+      c.translate(x, y);
+      c.scale(s, s);
+      c.strokeStyle = 'rgba(240,240,240,0.7)'; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(-11, -10); c.lineTo(-22, -33); c.moveTo(11, -10); c.lineTo(22, -33); c.moveTo(0, -10); c.lineTo(0, -35); c.stroke();
+      c.fillStyle = '#f2f2f2';
+      c.beginPath(); c.moveTo(-27, -32); c.quadraticCurveTo(0, -64, 27, -32); c.quadraticCurveTo(13, -38, 0, -34); c.quadraticCurveTo(-13, -38, -27, -32); c.fill();
+      c.fillStyle = '#ff6b3d';
+      c.beginPath(); c.moveTo(-9, -36); c.quadraticCurveTo(0, -61, 9, -36); c.quadraticCurveTo(4.5, -37, 0, -34.5); c.quadraticCurveTo(-4.5, -37, -9, -36); c.fill();
+      c.restore();
+      drawCrate(c, x, y, 0.8 * s, false);
+    }
+  }
+
+  function planeShape(c) {
+    c.beginPath();
+    c.moveTo(24, 0); c.quadraticCurveTo(22, -4, 14, -4.5); c.lineTo(-18, -3.5); c.lineTo(-22, 0); c.lineTo(-18, 3.5); c.lineTo(14, 4.5); c.quadraticCurveTo(22, 4, 24, 0);
+    c.moveTo(8, -4); c.lineTo(-2, -27); c.lineTo(-8, -27); c.lineTo(-4, -4); c.closePath();
+    c.moveTo(8, 4); c.lineTo(-4, 4); c.lineTo(-8, 27); c.lineTo(-2, 27); c.closePath();
+    c.moveTo(-14, -3); c.lineTo(-20, -11); c.lineTo(-23, -11); c.lineTo(-20, -2); c.closePath();
+    c.moveTo(-14, 3); c.lineTo(-20, 2); c.lineTo(-23, 11); c.lineTo(-20, 11); c.closePath();
+    c.fill(); // 每一塊的繞行方向都一樣，半透明的影子重疊的地方才不會變深或破洞
+  }
+
+  // 飛機（運輸機丟空投、轟炸機空襲），影子投在地上
+  function drawPlanes(c, dt) {
+    for (let i = planes.length - 1; i >= 0; i--) {
+      const p = planes[i];
+      p.life -= dt;
+      if (p.life <= 0) { planes.splice(i, 1); continue; }
+      const u = 1 - p.life / p.T;
+      const x = p.x0 + (p.x1 - p.x0) * u, y = p.y0 + (p.y1 - p.y0) * u;
+      const a = Math.atan2(p.y1 - p.y0, p.x1 - p.x0);
+      const s = p.k === 1 ? 1.55 : 1.25;
+      c.save();
+      c.translate(x + 34, y + 52); c.rotate(a); c.scale(s, s);
+      c.fillStyle = 'rgba(0,0,0,0.22)';
+      planeShape(c);
+      c.restore();
+      c.save();
+      c.translate(x, y); c.rotate(a); c.scale(s, s);
+      c.fillStyle = p.k === 1 ? '#3b4048' : '#66745a';
+      planeShape(c);
+      c.fillStyle = 'rgba(255,255,255,0.16)';
+      c.fillRect(-16, -1.5, 34, 2);
+      c.fillStyle = 'rgba(225,225,225,0.55)';
+      for (const ey of [-13, 13]) { c.beginPath(); c.arc(5, ey, 3, 0, Math.PI * 2); c.fill(); }
+      c.fillStyle = Math.sin(time * 10) > 0 ? '#ff4d4d' : '#5cff6e';
+      c.beginPath(); c.arc(-3, -26, 1.7, 0, Math.PI * 2); c.arc(-3, 26, 1.7, 0, Math.PI * 2); c.fill();
+      c.restore();
+    }
+  }
+
   // 目標在畫面外時，在畫面邊緣畫箭頭指過去（螢幕座標）
   function drawPointers(c, list) {
     const m = 30, top = view.top + 24;
@@ -989,24 +1271,35 @@ const Render = (() => {
   }
 
   function setMiniH(h) { if (h !== lastMiniH) { lastMiniH = h; document.body.style.setProperty('--mm-h', h + 'px'); } }
-  function drawMinimap(c, st) {
-    if (!view.follow || !map) { setMiniH(0); return; }
+  function drawMinimap(c, st, dt) {
+    if (!view.follow || !map || !miniOn) { setMiniH(0); return; }
     if (miniDirty) buildMini();
-    // 手機：放在左上角按鈕下面；電腦：放在 ⚙ 按鈕右邊
-    const mw = Math.round(touchMode ? Math.min(150, view.cw * 0.17) : Math.min(180, view.cw * 0.18)), mh = Math.round((mw * H) / W);
+    // 手機：放在左上角按鈕下面；電腦：放在 ⚙ 按鈕右邊。做得小一點、半透明，才不會擋到畫面
+    const mw = Math.round(touchMode ? Math.min(112, view.cw * 0.13) : Math.min(150, view.cw * 0.12)), mh = Math.round((mw * H) / W);
     const x0 = touchMode ? 12 : 60, y0 = touchMode ? 56 : 10;
     setMiniH(touchMode ? mh + 12 : 0);
+    // 有坦克開到小地圖底下就變得幾乎透明
+    let under = false;
+    for (const t of st.tanks) {
+      const s = toScreen(t.x, t.y);
+      if (s.x > x0 - 28 && s.x < x0 + mw + 28 && s.y > y0 - 28 && s.y < y0 + mh + 28) { under = true; break; }
+    }
+    miniFade += ((under ? 0.16 : 0.62) - miniFade) * Math.min(1, (dt || 0.016) * 8);
     c.save();
     c.scale(dpr, dpr);
     c.translate(x0, y0);
-    c.globalAlpha = 0.85;
-    c.fillStyle = 'rgba(0,0,0,0.6)';
+    c.globalAlpha = miniFade;
+    c.fillStyle = 'rgba(0,0,0,0.5)';
     rr(c, -3, -3, mw + 6, mh + 6, 6); c.fill();
     c.imageSmoothingEnabled = false;
     c.drawImage(miniCv, 0, 0, mw, mh);
     c.imageSmoothingEnabled = true;
-    c.globalAlpha = 1;
+    c.globalAlpha = Math.min(1, miniFade * 1.45);
     const k = mw / W;
+    // 空投（掉下來中、已經落地的）
+    c.fillStyle = '#ffb300';
+    for (const d of st.drops || []) c.fillRect(d.x * k - 2.5, d.y * k - 2.5, 5, 5);
+    for (const u of st.powerups) if (u.k === 'crate') c.fillRect(u.x * k - 2.5, u.y * k - 2.5, 5, 5);
     const o = st.obj;
     if (o && o.O) {
       if (o.mode === 'br' && o.O.z) {
@@ -1110,6 +1403,8 @@ const Render = (() => {
     }
 
     drawObjectivesGround(c, st.obj);
+    if (st.shells) drawShellsGround(c, st.shells);
+    if (st.drops) drawDropsGround(c, st.drops);
     for (const u of st.powerups) drawPowerup(c, u);
     for (const m of st.mines) drawMine(c, m, m.mine, m.team, m.color);
     drawFlags(c, st.obj, st.tanks);
@@ -1142,6 +1437,8 @@ const Render = (() => {
     c.drawImage(bushCv, 0, 0, W, H);
     c.globalAlpha = 1;
     for (const t of st.tanks) if ((t.flags & 64) && (t.me || t.ally)) drawTank(c, t, 0.4);
+    if (st.shells) drawShellsAir(c, st.shells);
+    if (st.drops) drawDropsAir(c, st.drops);
 
     // 雷射
     for (let i = beams.length - 1; i >= 0; i--) {
@@ -1203,6 +1500,7 @@ const Render = (() => {
     }
 
     drawZone(c, st.obj);
+    drawPlanes(c, dt);
 
     for (const t of st.tanks) if (!(t.flags & 512) || t.me || t.ally) drawLabel(c, t, t.me, t.teamColor);
     for (const b of st.bubbles) drawBubble(c, b.x, b.y, b.text, b.a);
@@ -1232,7 +1530,7 @@ const Render = (() => {
       c.fillRect(0, 0, cv.width, cv.height);
     } else {
       if (view.follow && st.pointers) drawPointers(c, st.pointers);
-      drawMinimap(c, st);
+      drawMinimap(c, st, dt);
     }
 
     // 受傷紅框
@@ -1263,7 +1561,35 @@ const Render = (() => {
   function drawAim(c, aim, dt) {
     hitMarker = Math.max(0, hitMarker - dt);
     const { x, y, from, ammo, ammoT, maxAmmo, rail, rapid } = aim;
-    if (from && !aim.noLine) {
+    if (aim.arty && from && !aim.noLine) {
+      // 自走砲：射程圈、拋物線、落點（三連發有三個落點）
+      const A = aim.arty;
+      c.save();
+      c.lineWidth = 1.5 * ls;
+      c.strokeStyle = 'rgba(255,200,120,0.2)';
+      c.setLineDash([3 * ls, 9 * ls]);
+      c.beginPath(); c.arc(from.x, from.y, C.ARTY_MAX, 0, Math.PI * 2); c.stroke();
+      c.beginPath(); c.arc(from.x, from.y, C.ARTY_MIN, 0, Math.PI * 2); c.stroke();
+      const L = Math.hypot(A.x - from.x, A.y - from.y), top = arcH(L);
+      c.strokeStyle = 'rgba(255,200,120,0.55)';
+      c.setLineDash([4 * ls, 6 * ls]);
+      c.beginPath();
+      for (let i = 0; i <= 24; i++) {
+        const u = i / 24;
+        const px = from.x + (A.x - from.x) * u, py = from.y + (A.y - from.y) * u - top * 4 * u * (1 - u);
+        if (i) c.lineTo(px, py); else c.moveTo(px, py);
+      }
+      c.stroke();
+      c.setLineDash([]);
+      for (const o of A.tri ? [-1, 0, 1] : [0]) {
+        const lx = A.x - Math.sin(A.ang) * o * 55, ly = A.y + Math.cos(A.ang) * o * 55;
+        c.fillStyle = 'rgba(255,177,66,0.12)';
+        c.strokeStyle = 'rgba(255,177,66,0.85)'; c.lineWidth = 2;
+        c.beginPath(); c.arc(lx, ly, C.ARTY_RADIUS, 0, Math.PI * 2); c.fill(); c.stroke();
+        c.beginPath(); c.moveTo(lx - 7, ly); c.lineTo(lx + 7, ly); c.moveTo(lx, ly - 7); c.lineTo(lx, ly + 7); c.stroke();
+      }
+      c.restore();
+    } else if (from && !aim.noLine) {
       const a = Math.atan2(y - from.y, x - from.x);
       const short = aim.range; // 霰彈、火焰的射程很短，只畫射程範圍
       const res = Core.castRay(map, from.x, from.y, a, short || 1400, short ? 0 : aim.bounces || 1, false, true);
@@ -1351,27 +1677,29 @@ const Render = (() => {
     c.restore();
   }
 
-  // 大廳的外觀預覽
-  function preview(canvas, color, skin, t) {
+  // 大廳的外觀 / 坦克種類預覽（驅逐戰車的砲管很長，縮小一點才放得下）
+  function preview(canvas, color, skin, t, cls) {
     const d = Math.min(2, window.devicePixelRatio || 1);
     if (canvas.width !== 52 * d) { canvas.width = 52 * d; canvas.height = 52 * d; }
     const c = canvas.getContext('2d');
     c.setTransform(1, 0, 0, 1, 0, 0);
     c.clearRect(0, 0, canvas.width, canvas.height);
-    c.setTransform(d * 1.15, 0, 0, d * 1.15, 26 * d, 28 * d);
+    const k = d * 1.15 * (cls === 'td' ? 0.8 : cls === 'heavy' ? 0.92 : 1);
+    c.setTransform(k, 0, 0, k, (cls === 'td' ? 30 : 26) * d, (cls === 'td' ? 31 : 28) * d);
     const old = time;
     time = t || 0;
-    drawTank(c, { x: 0, y: 0, ha: -Math.PI / 2, ta: -Math.PI / 2 - 0.5, color, skin, flags: 0, r: C.TANK_R }, 1);
+    drawTank(c, { x: 0, y: 0, ha: -Math.PI / 2, ta: -Math.PI / 2 - 0.5, color, skin, cls, flags: 0, r: C.TANK_R }, 1);
     time = old;
   }
 
   function setTouch(on) { touchMode = on; layout(); }
+  function setMinimap(on) { miniOn = !!on; if (!on) setMiniH(0); }
   function setCamMode(m) { camMode = m; layout(); }
   function setSpectate(on) { if (spectate !== on) { spectate = on; layout(); } }
   function setQuality(hi) { if (hiQ !== hi) { hiQ = hi; resize(); } }
 
   return {
-    init, resize, setMap, setTouch, setCamMode, setSpectate, setQuality, tileChanged, frame, toWorld, toScreen, preview, fx, view, PU_COLOR, TEAM_COLORS,
+    init, resize, setMap, setTouch, setCamMode, setSpectate, setQuality, setMinimap, tileChanged, frame, toWorld, toScreen, preview, fx, view, PU_COLOR, TEAM_COLORS,
     get map() { return map; }, get following() { return view.follow; },
   };
 })();

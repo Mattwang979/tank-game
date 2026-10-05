@@ -1,6 +1,6 @@
 /*
  * 電腦玩家：BFS 尋路（會走傳送門）、走位繞圈、預判射擊、閃避砲彈、埋地雷；困難難度會算反彈射擊。
- * 會用特殊武器，也會玩搶旗、佔山頭、躲毒圈。
+ * 會用特殊武器，也會玩搶旗、佔山頭、躲毒圈；會開各種坦克（自走砲會拋射越過牆）、搶空投、呼叫空襲、躲落點紅圈。
  * 輸出和真人一樣的輸入（按鍵 + 瞄準角度），不作弊移動。
  */
 (function (root, factory) {
@@ -72,6 +72,9 @@
       this.role = 'att';
       this.spot = null; this.spotT = 0;
       this.px = null; this.py = null;
+      this.trackT = 0; this.aimDist = 300; this.distErr = 0;
+      this.airT = 1 + Math.random() * 2;
+      this.dodgedShell = new Set();
     }
 
     // 模式目標：回傳 { x, y, urgent }，urgent 代表就算有敵人也先去目標
@@ -135,27 +138,38 @@
       // ---- 選目標
       let tgt = null, best = Infinity;
       const hill = mode === 'koth' ? room.obj : null;
+      const sp = p.special;
+      // 自走砲（沒拿特殊武器的時候）：砲彈拋過牆，不用看得到直線
+      const arty = p.cls === 'spg' && !sp && !p.boss;
+      let foes = 0;
       for (const q of room.players.values()) {
         if (!q.alive || q === p || (team && q.team === p.team)) continue;
+        foes++;
         const d = Math.hypot(q.x - p.x, q.y - p.y);
-        if (room.hidden(q) && d > C.BUSH_SEE) continue;
-        let s = d * (Core.lineClear(map, p.x, p.y, q.x, q.y) ? 0.6 : 1) * (q.protectT > 0 ? 3 : 1);
+        if (room.hidden(q) && d > (p.see || C.BUSH_SEE)) continue;
+        const clear = Core.lineClear(map, p.x, p.y, q.x, q.y);
+        let s = d * (clear || arty ? 0.6 : 1) * (q.protectT > 0 ? 3 : 1);
+        if (arty && (d < C.ARTY_MIN || d > C.ARTY_MAX)) s *= 1.6;
         if (q.carry >= 0) s *= 0.4;
         if (hill && Math.hypot(q.x - hill.x, q.y - hill.y) < hill.r) s *= 0.6;
         if (s < best) { best = s; tgt = q; }
       }
-      if (tgt !== this.target) { this.target = tgt; this.seenT = 0; }
+      if (tgt !== this.target) { this.target = tgt; this.seenT = 0; this.trackT = 0; }
       const los = !!tgt && Core.lineClear(map, p.x, p.y, tgt.x, tgt.y);
       this.seenT = los ? this.seenT + dt : 0;
+      this.trackT = tgt ? this.trackT + dt : 0;
       const d = tgt ? Math.hypot(tgt.x - p.x, tgt.y - p.y) : Infinity;
-      const sp = p.special;
       const close = sp === 'shotgun' || sp === 'flame';
 
-      // ---- 目的地
+      // ---- 目的地（空投箱很搶手；血少或沒彈藥會去拿補給包）
       let pu = null, pd = Infinity;
       for (const u of room.powerups) {
+        if (u.k === 'crate' && p.enemy) continue;
         const ud = Math.hypot(u.x - p.x, u.y - p.y);
-        const want = (p.hp < p.maxHp * 0.55 && (u.k === 'heal' || u.k === 'shield')) ? ud * 0.4 : ud;
+        let want = ud;
+        if (p.hp < p.maxHp * 0.55 && (u.k === 'heal' || u.k === 'shield' || u.k === 'supply')) want = ud * 0.4;
+        else if (u.k === 'crate') want = ud * 0.45;
+        else if (u.k === 'supply' && p.ammo < 1) want = ud * 0.6;
         if (want < pd) { pd = want; pu = u; }
       }
       const obj = this.objective(room, p, dt);
@@ -172,16 +186,25 @@
         goal = this.roam;
       }
 
-      // ---- 移動
+      // ---- 移動（不同坦克種類保持不同的交戰距離）
       let mx = 0, my = 0;
       this.brick = null;
-      if (los && goal === tgt && d < 430) {
+      const cls = p.cls;
+      const engage = goal === tgt && (arty ? d < C.ARTY_MAX - 30 : los && d < (cls === 'td' ? 560 : 430));
+      if (engage) {
         const ax = (tgt.x - p.x) / d, ay = (tgt.y - p.y) / d;
         this.strafeT -= dt;
-        if (this.strafeT <= 0) { this.strafe *= -1; this.strafeT = 0.6 + Math.random() * 1.4; }
-        mx = -ay * this.strafe; my = ax * this.strafe;
-        // 霰彈和火焰要貼近打，其他武器保持距離
-        const rr = close ? (d > 130 ? 1.1 : d < 60 ? -0.5 : 0.2) : d < 200 ? -0.9 : d > 340 ? 0.8 : 0;
+        if (this.strafeT <= 0) { this.strafe *= -1; this.strafeT = (cls === 'light' ? 0.4 : 0.6) + Math.random() * 1.4; }
+        const sw = arty ? 0.5 : cls === 'heavy' ? 0.7 : 1;
+        mx = -ay * this.strafe * sw; my = ax * this.strafe * sw;
+        // 霰彈和火焰要貼近打，自走砲和驅逐戰車躲遠一點，重坦往前推
+        let rr;
+        if (sp === 'flame') rr = d > C.FLAME_RANGE - 40 ? 1.1 : d < 70 ? -0.5 : 0.2;
+        else if (sp === 'shotgun') rr = d > 130 ? 1.1 : d < 60 ? -0.5 : 0.2;
+        else if (arty) rr = d < 280 ? -1.1 : d > 500 ? 0.6 : 0;
+        else if (cls === 'td') rr = d < 320 ? -0.9 : d > 520 ? 0.7 : 0;
+        else if (cls === 'heavy') rr = d < 150 ? -0.5 : d > 280 ? 0.9 : 0.15;
+        else rr = d < 200 ? -0.9 : d > 340 ? 0.8 : 0;
         mx += ax * rr; my += ay * rr;
       } else {
         const wp = this.nextWaypoint(map, p, goal, dt);
@@ -220,6 +243,19 @@
         if (p.dashCd <= 0 && t < 0.3 && Math.random() < cfg.dodge) k |= K.DASH;
       }
       if (this.dodged.size > 300) this.dodged.clear();
+      // 躲自走砲落點和空襲紅圈（隊友的空襲炸不到自己，不用躲）
+      for (const s of room.shells) {
+        if (s.t < 0 || s.tx === null || s.T - s.t > 0.95 || this.dodgedShell.has(s.id)) continue;
+        if (s.kind === 1 && (s.owner === p.id || (team && s.team === p.team))) continue;
+        const dx = p.x - s.tx, dy = p.y - s.ty, dd = Math.hypot(dx, dy);
+        if (dd > s.r + p.r) continue;
+        this.dodgedShell.add(s.id);
+        if (Math.random() > cfg.dodge) continue;
+        const a = dd > 1 ? Math.atan2(dy, dx) : Math.random() * Math.PI * 2;
+        this.dodgeT = 0.45; this.dodgeX = Math.cos(a); this.dodgeY = Math.sin(a);
+        if (p.dashCd <= 0 && s.T - s.t < 0.45 && Math.random() < cfg.dodge) k |= K.DASH;
+      }
+      if (this.dodgedShell.size > 300) this.dodgedShell.clear();
       if (this.dodgeT > 0) { mx = this.dodgeX; my = this.dodgeY; }
 
       // 卡住了就亂走一下
@@ -246,25 +282,37 @@
 
       // ---- 瞄準與開火
       this.errT -= dt;
-      if (this.errT <= 0) { this.errT = 0.4; this.err = (Math.random() * 2 - 1) * cfg.aimErr; }
+      if (this.errT <= 0) { this.errT = 0.4; this.err = (Math.random() * 2 - 1) * cfg.aimErr; this.distErr = (Math.random() * 2 - 1) * cfg.aimErr * 260; }
       let desired = null, canFire = false, tol = 0.08;
-      const range = sp === 'shotgun' ? 200 : sp === 'flame' ? 150 : sp === 'homing' ? 560 : 700;
-      if (los) {
-        const spd = sp === 'homing' ? C.MISSILE_SPEED : C.BULLET_SPEED;
+      const range = sp === 'shotgun' ? 200 : sp === 'flame' ? C.FLAME_RANGE - 15 : sp === 'homing' ? 560 : cls === 'td' ? 900 : 700;
+      if (arty && tgt) {
+        // 自走砲：預判對方落地時會在哪，算角度和距離（距離也有誤差）
+        const ft = C.ARTY_T0 + d / C.ARTY_SPD;
+        const lx = tgt.x + (tgt.vx || 0) * ft * 0.8, ly = tgt.y + (tgt.vy || 0) * ft * 0.8;
+        desired = Math.atan2(ly - p.y, lx - p.x) + this.err * 0.5;
+        this.aimDist = Core.clamp(Math.hypot(lx - p.x, ly - p.y) + this.distErr, C.ARTY_MIN, C.ARTY_MAX);
+        canFire = this.trackT > cfg.react + 0.2 && d > C.ARTY_MIN - 20 && d < C.ARTY_MAX + 40 && tgt.protectT <= 0;
+        tol = 0.12;
+        this.bank = null;
+      } else if (los) {
+        const spd = sp === 'homing' ? C.MISSILE_SPEED : p.bspd || C.BULLET_SPEED;
         const tt = sp === 'flame' || sp === 'rail' ? 0 : d / spd;
         const lx = tgt.x + (tgt.vx || 0) * tt * 0.9, ly = tgt.y + (tgt.vy || 0) * tt * 0.9;
         desired = Math.atan2(ly - p.y, lx - p.x) + this.err;
         canFire = this.seenT > cfg.react && d < range && tgt.protectT <= 0;
         if (close || sp === 'homing') tol = 0.3;
         this.bank = null;
-      } else if (cfg.bank && tgt && d < 760 && (!sp || sp === 'rail')) {
+      } else if (cfg.bank && tgt && d < 760 && (!sp || sp === 'rail') && !arty) {
         this.bankT -= dt;
         if (this.bankT <= 0) { this.bankT = 0.35; this.bank = this.findBank(map, p, tgt); }
         if (this.bank !== null) { desired = this.bank; canFire = tgt.protectT <= 0; }
       }
       if (desired === null) {
-        if (this.brick && !sp) { desired = Math.atan2(this.brick.y - p.y, this.brick.x - p.x); canFire = true; }
-        else if (ml > 0.01) desired = Math.atan2(my, mx);
+        if (this.brick && !sp) {
+          desired = Math.atan2(this.brick.y - p.y, this.brick.x - p.x);
+          this.aimDist = Core.clamp(Math.hypot(this.brick.x - p.x, this.brick.y - p.y), C.ARTY_MIN, C.ARTY_MAX);
+          canFire = true;
+        } else if (ml > 0.01) desired = Math.atan2(my, mx);
       }
       if (desired !== null) {
         const diff = Core.angDiff(desired, this.aim), mr = cfg.turn * dt;
@@ -282,7 +330,16 @@
         else if (p.mineAmmo >= (guarding ? 1 : 2) && Math.random() < cfg.mine * (guarding ? 3 : 1)) k |= K.MINE;
       }
 
-      return { s: ++this.seq, k, a: this.aim };
+      // ---- 呼叫空襲：附近有敵人就叫（沒看到敵人也有一點機率亂叫）
+      if (p.air > 0) {
+        this.airT -= dt;
+        if (this.airT <= 0) {
+          this.airT = 0.8 + Math.random() * 1.5;
+          if (foes > 0 && ((tgt && d < 900) || Math.random() < 0.25)) k |= K.CALL;
+        }
+      }
+
+      return { s: ++this.seq, k, a: this.aim, d: arty || this.brick ? Math.round(this.aimDist) : 0 };
     }
 
     nextWaypoint(map, p, goal, dt) {

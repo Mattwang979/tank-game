@@ -191,6 +191,46 @@ const Sfx = (() => {
       [1047, 1319, 1568].forEach((f) => tone({ type: 'triangle', f0: f, dur: 0.7, vol: 0.08, at: 0.4 }));
     },
     ach() { [1319, 1760, 2093].forEach((f, i) => tone({ type: 'sine', f0: f, dur: 0.25, vol: 0.1, at: i * 0.07 })); },
+
+    // ---- 坦克種類
+    heavyShot(x, y) {
+      const d = out(x, y);
+      noise({ dur: 0.3, vol: 0.75, type: 'lowpass', f0: 1800, f1: 120, q: 0.6, dest: d });
+      tone({ type: 'square', f0: 140, f1: 35, dur: 0.22, vol: 0.3, dest: d, filter: 700 });
+    },
+    tdShot(x, y) {
+      const d = out(x, y);
+      tone({ type: 'sawtooth', f0: 1800, f1: 200, dur: 0.12, vol: 0.18, dest: d, filter: 4000 });
+      noise({ dur: 0.18, vol: 0.6, type: 'bandpass', f0: 2600, f1: 400, q: 0.9, dest: d });
+      tone({ type: 'square', f0: 220, f1: 60, dur: 0.15, vol: 0.2, dest: d, filter: 1000 });
+    },
+    arty(x, y) {
+      const d = out(x, y);
+      tone({ type: 'sine', f0: 95, f1: 30, dur: 0.5, vol: 0.7, dest: d });
+      noise({ dur: 0.45, vol: 0.55, type: 'lowpass', f0: 900, f1: 80, q: 0.5, dest: d });
+    },
+    // 砲彈 / 炸彈快落地的呼嘯聲
+    whistle(x, y, dur) {
+      tone({ type: 'sine', f0: 1900, f1: 520, dur: dur || 0.7, vol: 0.07, attack: 0.08, dest: out(x, y) });
+    },
+    // ---- 空投、空襲
+    plane(x, y, dur) {
+      const d = out(x, y), T = dur || 2.4;
+      tone({ type: 'sawtooth', f0: 78, f1: 62, dur: T, vol: 0.12, attack: T * 0.4, dest: d, filter: 420 });
+      tone({ type: 'sawtooth', f0: 117, f1: 92, dur: T, vol: 0.06, attack: T * 0.4, dest: d, filter: 600 });
+      noise({ dur: T, vol: 0.1, type: 'bandpass', f0: 300, f1: 180, q: 0.8, attack: T * 0.4, dest: d });
+    },
+    land(x, y) {
+      const d = out(x, y);
+      tone({ type: 'sine', f0: 110, f1: 40, dur: 0.3, vol: 0.5, dest: d });
+      noise({ dur: 0.2, vol: 0.35, type: 'lowpass', f0: 1400, f1: 200, dest: d });
+      [880, 1175].forEach((f, i) => tone({ type: 'triangle', f0: f, dur: 0.12, vol: 0.08, at: 0.15 + i * 0.08, dest: d }));
+    },
+    aircall() {
+      [1250, 1250, 1660].forEach((f, i) => tone({ type: 'square', f0: f, dur: 0.07, vol: 0.06, at: i * 0.11, filter: 3000 }));
+      noise({ dur: 0.25, vol: 0.1, type: 'bandpass', f0: 1800, q: 2, at: 0.36 });
+    },
+    countdown(go) { tone({ type: 'square', f0: go ? 1320 : 660, dur: go ? 0.4 : 0.12, vol: 0.09, filter: 3000 }); },
   };
 
   // ---------------- 背景音樂：E 小調硬派鼓組 + 貝斯 + 琶音

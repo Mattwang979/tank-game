@@ -1,11 +1,12 @@
-/* 客戶端主程式：大廳、連線、輸入、本地預測 + 伺服器校正、內插、HUD、結算、成長系統 */
+/* 客戶端主程式：大廳（開房 / 加入 / 自己玩）、等待室、連線、輸入、本地預測 + 伺服器校正、內插、HUD、結算、成長系統 */
 (() => {
-  const { C, K } = Core;
-  const { MODES, TEAM_NAMES, TEAM_COLORS } = TBGame;
+  const { C, K, CLASSES, CLASS_LIST } = Core;
+  const { MODES, TEAM_NAMES, TEAM_COLORS, LEVELS, TIMES, MAX_PLAYERS } = TBGame;
+  const MAP_NAMES = TBMaps.MAPS.map((m) => m.name);
   const $ = (id) => document.getElementById(id);
   const COLORS = TBGame.COLORS;
   const TAUNTS = ['來啊！打我啊！', '哈哈哈哈哈', 'GG 太簡單', '小心腳下 😏', '救命啊！！'];
-  const WEAPON = { shell: '💥', rail: '⚡', mine: '💣', barrel: '🛢️', boom: '💀', missile: '🚀', shotgun: '💢', flame: '🔥', zone: '☠️' };
+  const WEAPON = { shell: '💥', rail: '⚡', mine: '💣', barrel: '🛢️', boom: '💀', missile: '🚀', shotgun: '💢', flame: '🔥', zone: '☠️', air: '✈️', arty: '🎇' };
   const BOT_LV = { easy: '簡單', normal: '普通', hard: '困難', boss: 'BOSS' };
   const SPECIAL_NAME = { rail: '雷射砲', homing: '追蹤飛彈', shotgun: '霰彈砲', flame: '火焰燃料' };
   const SPECIAL_MAX = { rail: 3, homing: 3, shotgun: 4, flame: C.FLAME_FUEL };
@@ -15,16 +16,19 @@
   const hexA = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; };
   const fmtTime = (sec) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 
+  const clampInt = (v, a, b) => Math.max(a, Math.min(b, Math.round(Number(v) || 0)));
+
   const S = {
-    conn: null, joined: false, role: null, local: false, myId: 0, room: '', lan: [], port: 0, map: null, homes: null,
+    conn: null, connTok: null, hello: null, tryRoom: '', joined: false, role: null, local: false, host: false,
+    myId: 0, room: '', lan: [], port: 0, map: null, homes: null,
     info: null, infoAt: 0, players: new Map(),
-    snaps: [], clock: null, bullets: { tm: 0, list: [] }, mines: [], pus: [], O: null,
+    snaps: [], clock: null, bullets: { tm: 0, list: [] }, shells: { tm: 0, list: [] }, drops: { tm: 0, list: [] }, mines: [], pus: [], O: null,
     you: null, pred: null, pending: [], seq: 0, smx: 0, smy: 0, wasAlive: false,
     keys: new Set(), mouse: { sx: innerWidth / 2, sy: innerHeight / 2, left: false, right: false }, latch: 0,
-    menuOpen: false, tabHeld: false, bubbles: new Map(), recoil: new Map(), burn: new Map(),
-    deadBy: '', ping: 0, lastTick: -1, lastDryToast: 0, flameSfxT: 0, myStreak: 0, pendingCmds: [],
+    menuOpen: false, tabHeld: false, bubbles: new Map(), recoil: new Map(), burn: new Map(), seenShells: new Set(),
+    deadBy: '', ping: 0, lastTick: -1, lastDryToast: 0, flameSfxT: 0, myStreak: 0, lastWhistle: 0, waitSec: -1,
   };
-  const settings = { cam: store.get('cam', 'auto'), gfx: store.get('gfx', 'hi'), vib: store.get('vib', '1') === '1' };
+  const settings = { cam: store.get('cam', 'auto'), gfx: store.get('gfx', 'hi'), vib: store.get('vib', '1') === '1', mini: store.get('mini', '1') === '1' };
   const modeKey = () => (S.info ? S.info.settings.mode : 'ffa');
   const M = () => MODES[modeKey()] || MODES.ffa;
   const buzz = (p) => { if (settings.vib && Touch.enabled && navigator.vibrate) try { navigator.vibrate(p); } catch (e) {} };
@@ -35,23 +39,49 @@
   const P2P = Net.mode() !== 'ws';
   if (Touch.available) document.body.classList.add('coarse');
   const randomCode = () => Array.from({ length: 4 }, () => 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 31)]).join('');
+  const cleanCode = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
   $('nameInput').value = store.get('name', '');
-  const urlRoom = new URLSearchParams(location.search).get('room');
-  // P2P 房間在公用配對伺服器上，預設給一個隨機代碼避免撞到陌生人
-  $('roomInput').value = (urlRoom || (P2P ? randomCode() : store.get('room', 'TANK'))).toUpperCase();
-  $('newRoomBtn').onclick = () => { $('roomInput').value = randomCode(); };
-  $('netHint').innerHTML = urlRoom
-    ? `朋友邀請你加入房間 <b>${esc(urlRoom.toUpperCase())}</b>，按「加入戰鬥！」就進去了`
-    : P2P ? '開房後按 ⚙ 把連結傳給朋友，手機電腦點開就能一起玩' : '';
-  if (urlRoom) $('joinBtn').textContent = '加入戰鬥！';
+  // 朋友傳來的邀請連結（?room=XXXX）
+  const urlRoom = cleanCode(new URLSearchParams(location.search).get('room'));
+  if (urlRoom) {
+    $('roomInput').value = urlRoom;
+    $('inviteBox').classList.remove('hidden');
+    $('inviteTitle').innerHTML = `📨 朋友邀請你加入房間 <b>${esc(urlRoom)}</b>`;
+  }
+  $('netHint').textContent = P2P ? '開房的人就是房主，遊戲進行中請保持畫面開著' : '連同一個 Wi-Fi，輸入同一個代碼就能加入';
   const pick = $('colorPick');
   COLORS.forEach((c) => {
     const d = document.createElement('div');
     d.className = 'sw' + (c === color ? ' on' : '');
     d.style.background = c;
-    d.onclick = () => { color = c; pick.querySelectorAll('.sw').forEach((x) => x.classList.toggle('on', x === d)); drawSkins(); };
+    d.onclick = () => { color = c; pick.querySelectorAll('.sw').forEach((x) => x.classList.toggle('on', x === d)); drawSkins(); drawClasses(); };
     pick.appendChild(d);
   });
+
+  // ---- 坦克種類
+  const BAR_NAMES = ['耐打', '速度', '火力', '射程'];
+  const clsPick = $('clsPick');
+  CLASS_LIST.forEach((id) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'cls';
+    b.dataset.id = id;
+    b.innerHTML = `<canvas></canvas><span>${CLASSES[id].short}</span>`;
+    b.onclick = () => { Profile.cls = id; drawClasses(); drawSkins(); showClassInfo(); };
+    clsPick.appendChild(b);
+  });
+  function drawClasses() {
+    const cur = Profile.cls;
+    clsPick.querySelectorAll('.cls').forEach((b) => {
+      b.classList.toggle('on', b.dataset.id === cur);
+      Render.preview(b.querySelector('canvas'), color, Profile.skin, skinT, b.dataset.id);
+    });
+  }
+  function showClassInfo() {
+    const c = CLASSES[Profile.cls];
+    $('clsInfo').innerHTML = `<span class="ci-name">${c.name}</span>　${c.desc}` +
+      `<div class="ci-bars">${c.bars.map((v, i) => `<div class="ci-bar">${BAR_NAMES[i]}<i><b style="width:${Math.round(v * 20)}%"></b></i></div>`).join('')}</div>`;
+  }
 
   // ---- 坦克外觀
   const skinPick = $('skinPick');
@@ -66,6 +96,7 @@
       Profile.skin = s.id;
       $('lobbyMsg').textContent = '';
       drawSkins();
+      drawClasses();
     };
     skinPick.appendChild(b);
   });
@@ -76,11 +107,11 @@
       const id = b.dataset.id;
       b.classList.toggle('on', id === cur);
       b.classList.toggle('locked', !Profile.unlocked(id));
-      Render.preview(b.querySelector('canvas'), color, id, skinT);
+      Render.preview(b.querySelector('canvas'), color, id, skinT, Profile.cls);
     });
   }
   // 黃金和彩虹外觀會動，大廳開著的時候慢慢重畫
-  setInterval(() => { if (!S.joined && !$('lobby').classList.contains('hidden')) { skinT += 0.12; drawSkins(); } }, 120);
+  setInterval(() => { if (!S.joined && !$('lobby').classList.contains('hidden')) { skinT += 0.12; drawSkins(); drawClasses(); } }, 120);
 
   function refreshProfileBar() {
     const L = Profile.level;
@@ -90,6 +121,8 @@
   }
   refreshProfileBar();
   drawSkins();
+  drawClasses();
+  showClassInfo();
 
   // ---- 生涯
   $('profileBar').onclick = () => { buildCareer(); $('career').classList.remove('hidden'); };
@@ -99,7 +132,8 @@
     const d = Profile.data, s = d.stats, L = Profile.level;
     const kd = s.deaths ? (s.kills / s.deaths).toFixed(2) : s.kills ? '∞' : '0';
     const cells = [['等級', `Lv ${L.lv}`], ['總經驗', d.xp], ['完成比賽', s.games], ['勝場', s.wins], ['擊殺', s.kills], ['死亡', s.deaths], ['K/D', kd], ['最高連殺', s.bestStreak],
-      ['反彈擊殺', s.rico], ['地雷擊殺', s.mineK], ['油桶擊殺', s.barrelK], ['搶旗得分', s.caps], ['山丘稱王', s.kothWins], ['吃雞', s.brWins], ['闖關最佳', s.bestWave ? `第 ${s.bestWave} 波` : '-'], ['擊倒 BOSS', s.bossK]];
+      ['反彈擊殺', s.rico], ['地雷擊殺', s.mineK], ['油桶擊殺', s.barrelK], ['搶旗得分', s.caps], ['山丘稱王', s.kothWins], ['吃雞', s.brWins], ['闖關最佳', s.bestWave ? `第 ${s.bestWave} 波` : '-'], ['擊倒 BOSS', s.bossK],
+      ['空襲擊殺', s.airK], ['搶到空投', s.crates], ['自走砲擊殺', s.artyK]];
     const got = Profile.ACH.filter((a) => d.ach[a.id]).length;
     const next = Profile.SKINS.find((x) => x.lv > L.lv);
     $('careerBody').innerHTML =
@@ -110,34 +144,180 @@
       '<div class="cr-note">紀錄存在這台裝置的瀏覽器裡，清除網站資料就會不見。</div>';
   }
 
-  $('joinBtn').onclick = () => join({});
-  $('soloBtn').onclick = () => join({ local: true, mode: 'ffa' });
-  $('wavesBtn').onclick = () => join({ local: true, mode: 'waves' });
-  for (const id of ['nameInput', 'roomInput']) $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') join({}); });
-  if (!$('nameInput').value) $('nameInput').focus();
+  // ================================================================ 開房設定（大廳的開房視窗、等待室的房主設定共用）
+  // onChange(key, value)：玩家改了某個設定；compact：等待室用的精簡版（模式按鈕不顯示說明）
+  function SetupUI(root, onChange, compact) {
+    const stepper = (k) => `<div class="stepper" data-k="${k}"><button type="button" data-d="-1">－</button><b></b><button type="button" data-d="1">＋</button></div>`;
+    root.innerHTML =
+      `<div class="su-label">模式</div>` +
+      `<div class="mode-cards${compact ? ' compact' : ''}">${Object.entries(MODES).map(([k, m]) => `<button type="button" data-mode="${k}"><div><i>${m.icon}</i>${m.name}</div><span>${m.desc}</span></button>`).join('')}</div>` +
+      '<div class="su-grid">' +
+      `<div class="su-item" data-part="players"><div class="su-label">幾個人一起玩 <span class="hint">（含你，人到齊自動開始）</span></div>${stepper('players')}</div>` +
+      `<div class="su-item"><div class="su-label" data-part="botlabel">電腦玩家</div><div class="su-row">${stepper('bots')}<div class="seg" data-k="level">${LEVELS.map((l) => `<button type="button" data-v="${l}">${BOT_LV[l]}</button>`).join('')}</div></div></div>` +
+      `<div class="su-item"><div class="su-label">地圖</div><select data-k="map"><option value="-1">🔁 每場輪替</option>${MAP_NAMES.map((n, i) => `<option value="${i}">${esc(n)}</option>`).join('')}</select></div>` +
+      `<div class="su-item"><div class="su-label" data-part="goallabel">勝利條件 · 時間</div><div class="su-row"><select data-k="target"></select><select data-k="time">${TIMES.map((t) => `<option value="${t}">${t / 60} 分鐘</option>`).join('')}</select></div></div>` +
+      '</div>';
+    const q = (sel) => root.querySelector(sel);
+    let cur = null, solo = false;
+    const limits = (k) => (k === 'players' ? [2, MAX_PLAYERS] : [0, MAX_PLAYERS - (solo ? 1 : cur.players)]);
+    root.querySelectorAll('[data-mode]').forEach((b) => (b.onclick = () => { if (cur && b.dataset.mode !== cur.mode) onChange('mode', b.dataset.mode); }));
+    root.querySelectorAll('.stepper').forEach((st) => st.querySelectorAll('button').forEach((b) => (b.onclick = () => {
+      if (!cur) return;
+      const k = st.dataset.k, [lo, hi] = limits(k);
+      const v = clampInt(cur[k] + Number(b.dataset.d), lo, hi);
+      if (v !== cur[k]) onChange(k, v);
+    })));
+    q('[data-k="level"]').querySelectorAll('button').forEach((b) => (b.onclick = () => { if (cur && b.dataset.v !== cur.level) onChange('level', b.dataset.v); }));
+    for (const k of ['map', 'target', 'time']) q(`select[data-k="${k}"]`).onchange = (e) => onChange(k, Number(e.target.value));
+    return {
+      update(s, isSolo) {
+        cur = s; solo = !!isSolo;
+        const md = MODES[s.mode] || MODES.ffa;
+        root.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === s.mode));
+        q('[data-part="players"]').classList.toggle('hidden', solo);
+        for (const k of ['players', 'bots']) {
+          const st = q(`.stepper[data-k="${k}"]`), [lo, hi] = limits(k);
+          st.querySelector('b').textContent = s[k];
+          st.querySelector('[data-d="-1"]').disabled = s[k] <= lo;
+          st.querySelector('[data-d="1"]').disabled = s[k] >= hi;
+        }
+        q('[data-part="botlabel"]').textContent = s.mode === 'waves' ? '友軍電腦（跟你同一隊）' : '電腦玩家';
+        q('[data-k="level"]').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === s.level));
+        q('select[data-k="map"]').value = String(s.map);
+        const ts = q('select[data-k="target"]');
+        const topts = md.targets.map((v) => `<option value="${v}">${v ? `${v} ${md.unit}` : '無盡模式'}</option>`).join('');
+        if (ts.dataset.opts !== topts) { ts.innerHTML = topts; ts.dataset.opts = topts; }
+        ts.value = String(s.target);
+        const tm = q('select[data-k="time"]');
+        tm.value = String(s.time);
+        tm.classList.toggle('hidden', s.mode === 'waves');
+        q('[data-part="goallabel"]').textContent = s.mode === 'waves' ? '撐過幾波就贏' : '勝利條件 · 時間限制';
+      },
+    };
+  }
 
-  function join(opts) {
+  const goalText = (s) => {
+    const md = MODES[s.mode] || MODES.ffa;
+    if (s.mode === 'waves') return s.target ? `撐過 ${s.target} 波` : '無盡模式';
+    return `先達 ${s.target} ${md.unit} · ${s.time / 60} 分鐘`;
+  };
+
+  let setupKind = 'multi', setup = null;
+  const suUI = SetupUI($('suBody'), (k, v) => {
+    if (k === 'mode') { setup.mode = v; setup.target = MODES[v].def; } else setup[k] = v;
+    if (setupKind === 'multi') setup.bots = Math.min(setup.bots, MAX_PLAYERS - setup.players);
+    suUI.update(setup, setupKind === 'solo');
+    refreshSetupSummary();
+  });
+  // 上次開房用的設定（開房、自己玩分開記）
+  function loadSetup(kind) {
+    let saved = null;
+    try { saved = JSON.parse(store.get('setup_' + kind, 'null')); } catch (e) {}
+    const s = Object.assign(kind === 'solo'
+      ? { mode: 'ffa', target: 10, time: 300, map: -1, players: 1, bots: 3, level: 'normal' }
+      : { mode: 'ffa', target: 15, time: 300, map: -1, players: 2, bots: 0, level: 'normal' }, saved && typeof saved === 'object' ? saved : {});
+    if (!MODES[s.mode]) s.mode = 'ffa';
+    if (!MODES[s.mode].targets.includes(s.target)) s.target = MODES[s.mode].def;
+    if (!TIMES.includes(s.time)) s.time = 300;
+    if (!(Number.isInteger(s.map) && s.map >= -1 && s.map < MAP_NAMES.length)) s.map = -1;
+    s.players = kind === 'solo' ? 1 : clampInt(s.players, 2, MAX_PLAYERS);
+    s.bots = clampInt(s.bots, 0, MAX_PLAYERS - s.players);
+    if (!LEVELS.includes(s.level)) s.level = 'normal';
+    return s;
+  }
+  function openSetup(kind, mode) {
+    if (S.conn) return;
+    setupKind = kind;
+    setup = loadSetup(kind);
+    // 「單人練習」用上次的模式（上次是闖關的話改回混戰）；「生存闖關」直接選好闖關
+    const want = mode || (kind === 'solo' && setup.mode === 'waves' ? 'ffa' : null);
+    if (want && want !== setup.mode) { setup.mode = want; setup.target = MODES[want].def; }
+    $('setupTitle').textContent = kind === 'solo' ? '🎯 自己玩（不用網路）' : '👥 開房間';
+    $('suGo').textContent = kind === 'solo' ? '開打！' : '建立房間';
+    $('lobbyMsg').textContent = '';
+    suUI.update(setup, kind === 'solo');
+    refreshSetupSummary();
+    $('setup').classList.remove('hidden');
+  }
+  function refreshSetupSummary() {
+    const s = setup, md = MODES[s.mode];
+    const bots = s.bots ? `＋ <b>${s.bots}</b> 台${s.mode === 'waves' ? '友軍' : ''}電腦（${BOT_LV[s.level]}）` : '';
+    let text;
+    if (setupKind === 'solo') {
+      if (s.mode === 'waves') text = `你${bots ? ' ' + bots : ''}一起擋住一波波敵軍`;
+      else text = s.bots ? `你 ${bots}` : '沒有電腦的話只能自己練習走位，建議至少加 1 台';
+    } else text = `等 <b>${s.players}</b> 個人到齊就自動開打 ${bots}`;
+    $('suSummary').innerHTML = `${md.icon} <b>${md.name}</b>：${text}`;
+  }
+  $('createBtn').onclick = () => openSetup('multi');
+  $('soloBtn').onclick = () => openSetup('solo');
+  $('wavesBtn').onclick = () => openSetup('solo', 'waves');
+  $('setupClose').onclick = () => $('setup').classList.add('hidden');
+  $('setup').addEventListener('mousedown', (e) => { if (e.target.id === 'setup') $('setup').classList.add('hidden'); });
+  $('suGo').onclick = () => {
+    store.set('setup_' + setupKind, JSON.stringify(setup));
+    const create = Object.assign({}, setup, setupKind === 'solo' ? { players: 1 } : {});
+    if (setupKind === 'solo') connect({ kind: 'solo', room: 'SOLO', create });
+    else connect({ kind: 'create', room: randomCode(), create });
+  };
+  const joinTyped = () => {
+    const code = cleanCode($('roomInput').value);
+    if (!code) { $('lobbyMsg').textContent = '請輸入朋友給你的房間代碼'; $('roomInput').focus(); return; }
+    connect({ kind: 'join', room: code });
+  };
+  $('joinBtn').onclick = joinTyped;
+  $('inviteJoinBtn').onclick = () => connect({ kind: 'join', room: urlRoom });
+  $('roomInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') joinTyped(); });
+  $('nameInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { if (urlRoom) connect({ kind: 'join', room: urlRoom }); else openSetup('multi'); } });
+  if (!$('nameInput').value) $('nameInput').focus();
+  addEventListener('keydown', (e) => { if (!S.joined && e.code === 'Escape') { $('setup').classList.add('hidden'); $('career').classList.add('hidden'); } });
+
+  // ================================================================ 連線
+  // kind：'create' 開新房間（自己當房主）、'join' 加入朋友的房間、'solo' 單人（不用網路）
+  function connect(opts) {
     if (S.conn) return;
     const name = $('nameInput').value.trim() || '坦克' + Math.floor(Math.random() * 900 + 100);
-    S.local = !!opts.local;
-    const room = S.local ? 'SOLO' : ($('roomInput').value.trim() || 'TANK').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'TANK';
+    $('nameInput').value = name;
     store.set('name', name); store.set('color', color);
-    if (!S.local) store.set('room', room);
-    // 單人模式進去之後自動設定
-    S.pendingCmds = !S.local ? [] : opts.mode === 'waves' ? [['mode', 'waves']] : [['addbot', 'easy'], ['addbot', 'normal'], ['addbot', 'normal']];
+    S.local = opts.kind === 'solo';
     Sfx.init();
     $('lobbyMsg').textContent = '連線中…';
     if (Touch.available) goFullscreen();
-    S.conn = Net.connect(room, {
-      onOpen: () => { S.role = S.conn.role; send({ t: 'join', name, color, skin: Profile.skin, room }); },
-      onMessage: (m) => { try { handle(m); } catch (err) { console.error(err); } },
-      onStatus: (text) => { $('lobbyMsg').textContent = text; if (!S.joined && /失敗|連不上/.test(text)) S.conn = null; },
+    const tok = {};
+    S.connTok = tok;
+    const mine = () => S.connTok === tok;
+    S.tryRoom = opts.room;
+    S.hello = () => {
+      const m = { t: 'join', name, color, skin: Profile.skin, cls: Profile.cls, room: S.tryRoom };
+      if (opts.create) m.create = opts.create;
+      if (opts.kind === 'join') m.join = true;
+      send(m);
+    };
+    const conn = Net.connect(opts.room, {
+      onOpen: () => { if (!mine()) return; S.role = conn.role; S.hello(); },
+      onMessage: (m) => { if (!mine()) return; try { handle(m); } catch (err) { console.error(err); } },
+      onStatus: (text) => { if (!mine()) return; $('lobbyMsg').textContent = text; if (!S.joined && /失敗|連不上/.test(text)) dropConn(); },
       onClose: (reason) => {
+        if (!mine()) return;
         if (S.joined) { $('discReason').textContent = reason || '連線中斷了'; $('disconnected').classList.remove('hidden'); }
-        else { $('lobbyMsg').textContent = '連不上伺服器 😢'; S.conn = null; }
+        else { $('lobbyMsg').textContent = '連不上伺服器 😢'; dropConn(); }
       },
-    }, { local: S.local });
-    if (!S.conn) $('lobbyMsg').textContent = '連線模組載入失敗，請重新整理';
+      // 加入的房間不存在
+      onNoRoom: () => { if (!mine()) return; dropConn(); noRoom(opts.room); },
+      // 開新房間但代碼剛好被別人用了 → 換一個代碼再開
+      onTaken: () => { if (!mine()) return; dropConn(); connect(Object.assign({}, opts, { room: randomCode() })); },
+    }, { local: S.local, create: opts.kind === 'create', join: opts.kind === 'join' });
+    if (mine()) S.conn = conn; else if (conn && conn.close) conn.close();
+    if (!conn && mine()) { $('lobbyMsg').textContent = '連線模組載入失敗，請重新整理'; S.connTok = null; }
+  }
+  // 放棄這條連線（找不到房間、房間滿了…），回到大廳可以再試一次
+  function dropConn() {
+    const c = S.conn;
+    S.conn = null; S.connTok = null; S.hello = null;
+    if (c && c.close) c.close();
+  }
+  function noRoom(code) {
+    $('lobbyMsg').innerHTML = `找不到房間 <b>${esc(code)}</b> 😢 可能房主還沒開房、已經關掉，或是代碼打錯了`;
   }
   const send = (o) => { if (S.conn) S.conn.send(o); };
   const cmd = (c, v) => send({ t: 'cmd', c, v });
@@ -161,25 +341,27 @@
   function handle(m) {
     switch (m.t) {
       case 'welcome':
-        S.joined = true; S.myId = m.id; S.room = m.room; S.lan = m.lan || []; S.port = m.port;
+        S.joined = true; S.myId = m.id; S.room = m.room; S.lan = m.lan || []; S.port = m.port; S.host = !!m.host;
         $('lobby').classList.add('hidden');
         $('career').classList.add('hidden');
+        $('setup').classList.add('hidden');
         $('hud').classList.remove('hidden');
         if (!S.local) history.replaceState(null, '', location.pathname + '?room=' + encodeURIComponent(m.room) + keepParams());
         if (Touch.available) { Touch.enable(); Render.setTouch(true); }
         Render.setCamMode(settings.cam);
         Render.setQuality(settings.gfx === 'hi');
+        Render.setMinimap(settings.mini);
         Profile.newSession();
         keepAwake();
         checkRotate();
         buildInvite();
-        for (const [c, v] of S.pendingCmds) cmd(c, v);
-        S.pendingCmds = [];
-        if (S.local) setTimeout(() => toast('單人模式：按 ⚙ 可以換模式、加減電腦'), 1500);
-        else if (S.role === 'host') setTimeout(() => toast('你是房主！按 ⚙ 複製連結邀請朋友（請保持這個畫面開著）'), 1200);
+        if (S.local) setTimeout(() => toast('單人模式：按 ⚙ 可以換坦克、加減電腦、換模式'), 1500);
         setInterval(() => send({ t: 'p', c: performance.now() }), 2000);
         break;
+      case 'noroom': dropConn(); noRoom(m.room || S.tryRoom); break;
+      case 'taken': S.tryRoom = randomCode(); if (S.hello) S.hello(); break; // 區網伺服器：代碼被用了，換一個再開
       case 'full':
+        dropConn();
         $('lobbyMsg').textContent = '房間已滿（最多 8 人）';
         break;
       case 'map':
@@ -191,9 +373,11 @@
       case 'info': {
         const prev = S.info ? S.info.state : null;
         S.info = m; S.infoAt = performance.now();
+        S.host = m.host === S.myId;
         S.players = new Map(m.players.map((p) => [p.id, p]));
-        if (prev === 'intermission' && m.state === 'playing') { Profile.newSession(); S.myStreak = 0; }
-        refreshScoreUI(); refreshMenu();
+        if (m.state === 'playing' && prev && prev !== 'playing') { Profile.newSession(); S.myStreak = 0; }
+        if (prev === 'waiting' && m.state === 'playing') { Sfx.play('countdown', true); buzz(60); }
+        refreshScoreUI(); refreshMenu(); refreshWaitRoom();
         break;
       }
       case 's': S.lastMsgAt = performance.now(); onSnap(m); break;
@@ -207,16 +391,32 @@
     if (S.clock === null || sample > S.clock) S.clock = sample;
     else S.clock += (sample - S.clock) * 0.02;
     const tanks = new Map();
-    for (const a of m.T) tanks.set(a[0], { id: a[0], x: a[1], y: a[2], ha: a[3], ta: a[4], hp: a[5], flags: a[6], shield: a[7], mh: a[8], r: a[9] });
+    for (const a of m.T) tanks.set(a[0], { id: a[0], x: a[1], y: a[2], ha: a[3], ta: a[4], hp: a[5], flags: a[6], shield: a[7], mh: a[8], r: a[9], cls: CLASS_LIST[a[10]] || 'medium' });
     S.snaps.push({ tm: m.tm, tanks });
     if (S.snaps.length > 40) S.snaps.shift();
     S.bullets = { tm: m.tm, list: m.B };
+    S.shells = { tm: m.tm, list: m.A || [] };
+    S.drops = { tm: m.tm, list: m.D || [] };
     S.mines = m.M;
     S.pus = m.P;
     S.O = m.O || null;
     S.you = m.you;
+    // 新出現的砲彈 / 炸彈：播呼嘯聲
+    const ids = new Set();
+    for (const r of S.shells.list) { ids.add(r[0]); if (!S.seenShells.has(r[0])) onNewShell(r); }
+    S.seenShells = ids;
     for (const e of m.E) onEvent(e);
     reconcile(m.you);
+  }
+
+  function onNewShell(r) {
+    const [, kind, , , tx, ty, t, T, owner] = r;
+    const now = performance.now();
+    if (now - S.lastWhistle < 120) return;
+    const p = myPos();
+    if (kind === 0 && owner !== S.myId && Math.hypot(p.x - tx, p.y - ty) > 420) return;
+    S.lastWhistle = now;
+    Sfx.play('whistle', tx, ty, Math.max(0.35, T - t));
   }
 
   // 伺服器校正：以伺服器狀態為準，重播還沒被確認的輸入
@@ -225,7 +425,7 @@
     if (!y.alive) { S.pred = null; S.wasAlive = false; return; }
     const old = S.pred && S.wasAlive ? { x: S.pred.x, y: S.pred.y } : null;
     const dist = S.pred ? S.pred.dist : 0;
-    S.pred = { x: y.x, y: y.y, vx: y.vx, vy: y.vy, ha: y.ha, dashT: y.dashT, dashCd: y.dashCd, slideT: y.slideT, portLock: y.portLock, boost: y.boostT > 0, spd: y.spd, r: y.r, dist };
+    S.pred = { x: y.x, y: y.y, vx: y.vx, vy: y.vy, ha: y.ha, dashT: y.dashT, dashCd: y.dashCd, dcd: y.dcd, slideT: y.slideT, portLock: y.portLock, boost: y.boostT > 0, spd: y.spd, r: y.r, dist };
     if (S.info && S.info.state === 'playing') for (const p of S.pending) Core.stepTank(S.pred, p.k, C.DT, S.map);
     S.pred.justDashed = false; S.pred.justPorted = null; S.pred.justPadded = false;
     if (old) {
@@ -252,11 +452,22 @@
   function onEvent(e) {
     const me = S.myId, fx = Render.fx;
     switch (e.e) {
-      case 'shot':
+      case 'shot': {
+        // k：0 一般、1 連射、2 追蹤飛彈、3 霰彈、4 自走砲、5 驅逐戰車、6 重坦
         fx.shot(e.x, e.y, e.a, colorOf(e.id), e.k);
-        Sfx.play(e.k === 2 ? 'missile' : e.k === 3 ? 'shotgun' : 'shot', e.x, e.y, e.k === 1);
-        S.recoil.set(e.id, e.k === 3 ? 8 : e.k === 1 ? 3 : 6);
-        if (e.id === me) { fx.shake(e.k === 3 ? 3 : e.k === 1 ? 0.5 : 1.4); if (e.k === 3) buzz(25); }
+        Sfx.play({ 2: 'missile', 3: 'shotgun', 4: 'arty', 5: 'tdShot', 6: 'heavyShot' }[e.k] || 'shot', e.x, e.y, e.k === 1);
+        S.recoil.set(e.id, { 1: 3, 3: 8, 4: 9, 5: 8, 6: 7 }[e.k] || 6);
+        if (e.id === me) { fx.shake({ 1: 0.5, 3: 3, 4: 2.5, 5: 2, 6: 2.2 }[e.k] || 1.4); if (e.k === 3 || e.k === 4) buzz(25); }
+        break;
+      }
+      case 'plane':
+        fx.plane(e.x0, e.y0, e.x1, e.y1, e.T, e.k);
+        Sfx.play('plane', (e.x0 + e.x1) / 2, (e.y0 + e.y1) / 2, e.T);
+        break;
+      case 'land': fx.land(e.x, e.y); Sfx.play('land', e.x, e.y); break;
+      case 'aircall':
+        Sfx.play('aircall');
+        if (e.id === me) { toast('✈️ 轟炸機出動！炸彈會落在敵人附近'); buzz([30, 30, 30]); }
         break;
       case 'rail':
         fx.rail(e.segs, '#ff6ec7');
@@ -313,12 +524,19 @@
         }
         break;
       }
-      case 'ann': queueAnn(e); break;
+      case 'ann':
+        // 觀戰中（大逃殺出局、闖關沒命）不要在畫面中央播擊殺訊息，左上 / 右上的擊殺列表還是看得到
+        if (e.k === 'kill' && spectating()) break;
+        queueAnn(e);
+        break;
       case 'pu':
         fx.pickup(e.x, e.y, e.k, e.t);
         Sfx.play(e.k === 'cloak' ? 'cloak' : 'pickup', e.x, e.y);
         if (e.k === 'cloak') fx.cloak(e.x, e.y);
-        if (e.id === me) { toast('獲得：' + e.t); buzz(20); }
+        if (e.id === me) {
+          if (e.k === 'crate') { Profile.crate(); toast(Touch.enabled ? '📦 搶到空投！按 📡 呼叫空襲' : '📦 搶到空投！按 Q 呼叫空襲'); buzz([30, 40, 60]); }
+          else { toast('獲得：' + e.t); buzz(20); }
+        }
         break;
       case 'puspawn': fx.puSpawn(e.x, e.y, e.k); Sfx.play('puSpawn', e.x, e.y); break;
       case 'mine': {
@@ -400,6 +618,8 @@
     const s = S.snaps[S.snaps.length - 1];
     return s ? s.tanks.get(id) : null;
   }
+  // 出局觀戰中（大逃殺被淘汰、闖關沒命了）
+  const spectating = () => !!(S.you && !S.you.alive && S.you.out && S.info && S.info.state === 'playing');
   const skinOf = (id) => { const p = S.players.get(id); return p ? p.sk : 'classic'; };
 
   // ================================================================ 輸入
@@ -413,6 +633,7 @@
     S.keys.add(e.code);
     if (e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') S.latch |= K.DASH;
     if (e.code === 'KeyE') S.latch |= K.MINE;
+    if (e.code === 'KeyQ') S.latch |= K.CALL;
     if (/^Digit[1-5]$/.test(e.code)) send({ t: 'taunt', i: Number(e.code[5]) - 1 });
     if (e.code === 'KeyM') toast(Sfx.toggleSfx() ? '音效：開' : '音效：關');
     if (e.code === 'KeyN') toast(Sfx.toggleMusic() ? '音樂：開' : '音樂：關');
@@ -461,6 +682,19 @@
     const m = mouseWorld();
     return Math.atan2(m.y - p.y, m.x - p.x);
   }
+  // 自走砲的射程：電腦是自己到滑鼠的距離；手機是瞄準搖桿拉多遠（輕點自動瞄準的話就是到敵人的距離）
+  const isArty = () => !!(S.you && S.you.cls === 'spg' && !S.you.sp);
+  function artyDist() {
+    let d;
+    if (Touch.enabled) d = Touch.tapDist != null ? Touch.tapDist : C.ARTY_MIN + Touch.aimMag * (C.ARTY_MAX - C.ARTY_MIN);
+    else {
+      const p = S.pred || S.you;
+      if (!p) return 300;
+      const m = mouseWorld();
+      d = Math.hypot(m.x - p.x, m.y - p.y);
+    }
+    return Math.round(Core.clamp(d, C.ARTY_MIN, C.ARTY_MAX));
+  }
 
   // ================================================================ 主迴圈
   let last = performance.now(), acc = 0;
@@ -473,12 +707,13 @@
     acc += dt;
     const batch = [];
     const playing = S.info && S.info.state === 'playing';
+    const ad = isArty() ? artyDist() : 0;
     while (acc >= C.DT && batch.length < 6) {
       acc -= C.DT;
       const k = sampleKeys();
       const a = Math.round(aimAngle() * 1000) / 1000;
       const s = ++S.seq;
-      batch.push([s, k, a]);
+      batch.push(ad ? [s, k, a, ad] : [s, k, a]);
       S.pending.push({ s, k, a });
       if (S.pred && playing) {
         S.pred.boost = S.you && S.you.boostT > 0;
@@ -513,6 +748,7 @@
       if (b.d > 0) Render.fx.burnText(b.x, b.y, `-${b.d} 🔥`);
     }
 
+    tickWait();
     const st = buildState();
     // 火焰噴射聲（不管幾台在噴都只播一個）
     S.flameSfxT -= dt;
@@ -558,18 +794,22 @@
     const y = S.you;
     if (S.pred && y && y.alive) {
       const own = latest && latest.tanks.get(me);
-      const t = { id: me, x: S.pred.x + S.smx, y: S.pred.y + S.smy, ha: S.pred.ha, ta: aimAngle(), hp: y.hp, mh: y.maxHp, r: y.r, shield: y.shield, flags: own ? own.flags : 0 };
+      const t = { id: me, x: S.pred.x + S.smx, y: S.pred.y + S.smy, ha: S.pred.ha, ta: aimAngle(), hp: y.hp, mh: y.maxHp, r: y.r, shield: y.shield, flags: own ? own.flags : 0, cls: y.cls };
       decorate(t, me, team, mt, carriers);
       st.tanks.push(t);
       Sfx.setListener(t.x, t.y);
       const m = Touch.enabled ? { x: t.x + Math.cos(t.ta) * 300, y: t.y + Math.sin(t.ta) * 300 } : mouseWorld();
       const sp = y.sp;
       st.aim = {
-        x: m.x, y: m.y, from: { x: t.x, y: t.y }, ammo: y.ammo, ammoT: y.ammoT, maxAmmo: C.MAX_AMMO, rail: sp === 'rail', rapid: y.rapidT > 0,
+        x: m.x, y: m.y, from: { x: t.x, y: t.y }, ammo: y.ammo, ammoT: y.ammoT, maxAmmo: y.maxAmmo || C.MAX_AMMO, rail: sp === 'rail', rapid: y.rapidT > 0,
         special: sp ? { k: sp, n: y.spN, max: SPECIAL_MAX[sp] } : null,
         range: sp === 'shotgun' ? 190 : sp === 'flame' ? C.FLAME_RANGE : 0, arc: sp === 'shotgun' ? C.PELLET_SPREAD : C.FLAME_ARC,
         bounces: y.bounceT > 0 ? 3 : 1, color: sp ? hexA(Render.PU_COLOR[sp], 0.5) : y.bounceT > 0 ? 'rgba(61,252,255,0.35)' : null,
       };
+      if (isArty()) {
+        const d = artyDist();
+        st.aim.arty = { x: t.x + Math.cos(t.ta) * d, y: t.y + Math.sin(t.ta) * d, ang: t.ta, tri: y.tripleT > 0 };
+      }
       if (Touch.enabled) { st.aim.ringOnly = true; st.aim.noLine = !Touch.aiming; }
       // 鏡頭：跟著自己，稍微往瞄準的方向偏
       let lx = 0, ly = 0;
@@ -580,8 +820,8 @@
       const m = mouseWorld();
       st.aim = { x: m.x, y: m.y };
     }
-    // 出局（大逃殺 / 闖關沒命）的時候改看全圖
-    Render.setSpectate(!!(y && !y.alive && y.out));
+    // 出局（大逃殺 / 闖關沒命）、等待室的時候改看全圖
+    Render.setSpectate(!!(y && !y.alive && y.out) || !!(S.info && S.info.state === 'waiting'));
     S.visible = st.tanks;
 
     // 砲彈：從最新快照往前外插（含反彈、傳送門），讓畫面上的砲彈不延遲
@@ -598,6 +838,14 @@
       st.mines.push({ x: r[1], y: r[2], armed: !!r[3], mine: r[4] === me, team: team && owner && owner.team === mt, color: colorOf(r[4]) });
     }
     for (const r of S.pus) st.powerups.push({ id: r[0], x: r[1], y: r[2], k: r[3] });
+    // 自走砲砲彈、空襲炸彈：往前外插一點點；自己和隊友的是橘色，敵人的是紅色
+    const dtS = Core.clamp((serverNow - S.shells.tm) / 1000, 0, 0.15);
+    st.shells = S.shells.list.map((r) => {
+      const owner = S.players.get(r[8]);
+      return { id: r[0], kind: r[1], x0: r[2], y0: r[3], tx: r[4], ty: r[5], t: Math.min(r[7], r[6] + dtS), T: r[7], r: r[9], safe: r[8] === me || !!(team && owner && owner.team === mt) };
+    });
+    const dtD = Core.clamp((serverNow - S.drops.tm) / 1000, 0, 0.15);
+    st.drops = S.drops.list.map((r) => ({ id: r[0], x: r[1], y: r[2], t: Math.max(0, r[3] - dtD) }));
 
     const now = performance.now();
     for (const [id, bub] of S.bubbles) {
@@ -610,6 +858,11 @@
     const mode = modeKey();
     st.obj = { mode, O: S.O, homes: S.homes, colorOf, myTeam: mt };
     const pts = [];
+    if (S.info && S.info.state === 'playing' && y && y.alive) {
+      // 空投箱（掉下來中、已經落地的）
+      for (const d of st.drops) pts.push({ x: d.x, y: d.y, icon: '📦', c: '#ffb300' });
+      for (const u of st.powerups) if (u.k === 'crate') pts.push({ x: u.x, y: u.y, icon: '📦', c: '#ffb300' });
+    }
     if (S.O && S.info && S.info.state === 'playing') {
       if (mode === 'ctf' && S.O.f) {
         const enemyFlag = S.O.f[1 - mt], ownFlag = S.O.f[mt];
@@ -641,6 +894,7 @@
     t.recoil = S.recoil.get(id) || 0;
     t.boss = !!(t.flags & 32768);
     t.carry = carriers.has(id) ? carriers.get(id) : -1;
+    if (!t.cls) t.cls = p && p.c ? p.c : 'medium';
   }
 
   // ================================================================ HUD
@@ -663,28 +917,39 @@
 
     let ammo = '';
     const sp = y.sp;
+    const maxAmmo = y.maxAmmo || C.MAX_AMMO;
     if (sp === 'flame') ammo = `<div class="fuel"><i style="width:${Math.round((y.spN / SPECIAL_MAX.flame) * 100)}%"></i></div>`;
     else if (sp) for (let i = 0; i < y.spN; i++) ammo += `<div class="pip sp" style="--c:${Render.PU_COLOR[sp]}"></div>`;
     else if (y.rapidT > 0) ammo = '<div class="pip inf">∞</div>';
-    else for (let i = 0; i < C.MAX_AMMO; i++) {
+    else for (let i = 0; i < maxAmmo; i++) {
       if (i < y.ammo) ammo += '<div class="pip"></div>';
-      else if (i === y.ammo) ammo += `<div class="pip empty loading" style="--p:${Math.round(y.ammoT * 100)}%"></div>`;
+      else if (i === y.ammo) ammo += `<div class="pip empty loading" style="--p:${Math.round(Math.min(1, y.ammoT) * 100)}%"></div>`;
       else ammo += '<div class="pip empty"></div>';
     }
     setHTML('ammo', ammo);
-    setHTML('ammoLabel', sp ? SPECIAL_NAME[sp] : '砲彈');
+    setHTML('ammoLabel', sp ? SPECIAL_NAME[sp] : y.cls === 'spg' ? '砲彈（拋射）' : '砲彈');
+    const me = S.players.get(S.myId);
+    const cls = CLASSES[y.cls] || CLASSES.medium;
+    setHTML('clsLabel', me && me.nc && CLASSES[me.nc] ? `${cls.name} → 下次 ${CLASSES[me.nc].short}` : cls.name);
     let mines = '';
     const mx = Math.max(C.MINE_BASE, y.mines);
     for (let i = 0; i < mx; i++) mines += `<div class="mpip${i < y.mines ? '' : ' empty'}"></div>`;
     setHTML('mines', mines);
-    const dashPct = Math.round((1 - y.dashCd / C.DASH_CD) * 100);
+    const dashPct = Math.round(Core.clamp(1 - y.dashCd / (y.dcd || C.DASH_CD), 0, 1) * 100);
     $('dashfill').style.width = dashPct + '%';
     $('dash').classList.toggle('ready', y.dashCd <= 0);
+    // 空襲（搶到空投才有）
+    const air = playing && y.alive ? y.air || 0 : 0;
+    $('airBlock').classList.toggle('hidden', !air);
+    setHTML('air', '✈️'.repeat(air));
     if (Touch.enabled) {
       setHTML('mineBadge', String(y.mines));
       const bd = $('btnDash');
       bd.classList.toggle('cd', y.dashCd > 0);
       bd.style.background = y.dashCd > 0 ? `conic-gradient(rgba(127,227,255,.35) ${dashPct}%, rgba(10,14,20,.55) 0)` : '';
+      $('btnAir').classList.toggle('hidden', !air);
+      setHTML('airBadge', String(air));
+      setHTML('stickRHint', isArty() ? '拉越遠打越遠<br>放開開砲' : '拖曳瞄準<br>放開開砲');
     }
 
     const buffs = [];
@@ -701,13 +966,17 @@
     setHTML('buffs', buffs.map(([n, c, t]) => `<span class="buff" style="color:${c}">${n}${t ? ' ' + Math.ceil(t) : ''}</span>`).join(''));
 
     const dead = !y.alive && playing;
+    const spec = dead && !!y.out;
     $('deathscreen').classList.toggle('hidden', !dead);
+    // 觀戰的時候死亡畫面縮成下面一小條，把畫面讓出來看別人打
+    $('deathscreen').classList.toggle('spec', spec);
+    document.body.classList.toggle('spectating', spec);
     if (dead) {
       const O = S.O || {};
       if (y.out && mode === 'br') {
-        setHTML('deadTitle', '💀 出局了！');
+        setHTML('deadTitle', '💀 出局');
         setHTML('deathby', S.deadBy || '');
-        setHTML('respawn', O.ph ? `下一回合 ${O.w} 秒後開始…` : `觀戰中，還剩 ${O.a || 0} 台坦克活著`);
+        setHTML('respawn', O.ph ? `下一回合 ${O.w} 秒後開始…` : `👀 觀戰中 · 還剩 ${O.a || 0} 台`);
       } else if (y.out && mode === 'waves') {
         setHTML('deadTitle', '💀 生命用完了');
         setHTML('deathby', S.deadBy || '');
@@ -723,8 +992,9 @@
     const left = Math.max(0, S.info.timeLeft - (performance.now() - S.infoAt) / 1000);
     const sec = Math.ceil(left);
     const O = S.O;
-    if (mode === 'waves') setHTML('timer', playing && O ? (O.w ? `第 ${O.w} 波` : '準備') : '休息');
-    else setHTML('timer', playing ? fmtTime(sec) : '休息');
+    const idle = S.info.state === 'waiting' ? '等待中' : '休息';
+    if (mode === 'waves') setHTML('timer', playing && O ? (O.w ? `第 ${O.w} 波` : '準備') : idle);
+    else setHTML('timer', playing ? fmtTime(sec) : idle);
     $('timer').classList.toggle('urgent', playing && mode !== 'waves' && sec <= 30);
     if (playing && mode !== 'waves' && sec <= 10 && sec > 0 && sec !== S.lastTick) { S.lastTick = sec; Sfx.play('tick'); }
     setHTML('objline', playing ? objLine(mode, O) : '');
@@ -798,15 +1068,16 @@
     }
     setHTML('goal', goal);
 
-    const inter = info.state !== 'playing';
+    const inter = info.state === 'intermission';
     $('results').classList.toggle('hidden', !inter);
     if (inter) { buildResults(info, list, md); $('scoreboard').classList.add('hidden'); return; }
+    if (info.state === 'waiting') { $('scoreboard').classList.add('hidden'); return; }
     const show = S.tabHeld || S.scoreToggle;
     $('scoreboard').classList.toggle('hidden', !show);
     if (!show) return;
     const head = `<h2>計分板</h2><div class="sb-sub">${map} · ${md.icon} ${md.name} · ${md.desc}</div>`;
     const cols = scoreCols(mode);
-    const row = (p) => `<tr class="${p.id === S.myId ? 'me' : ''}${p.out ? ' out' : ''}"><td><span class="dot" style="background:${md.tc ? TEAM_COLORS[p.team] : p.color}"></span>${esc(p.name)}${p.bot ? `<span class="bot">電腦·${BOT_LV[p.bot]}</span>` : ''}</td>${cols.map((c) => `<td class="num">${c.v(p)}</td>`).join('')}</tr>`;
+    const row = (p) => `<tr class="${p.id === S.myId ? 'me' : ''}${p.out ? ' out' : ''}"><td><span class="dot" style="background:${md.tc ? TEAM_COLORS[p.team] : p.color}"></span>${esc(p.name)}${p.bot ? `<span class="bot">電腦·${BOT_LV[p.bot]}</span>` : ''}<span class="bot">${CLASSES[p.c] ? CLASSES[p.c].short : ''}</span></td>${cols.map((c) => `<td class="num">${c.v(p)}</td>`).join('')}</tr>`;
     let body = '';
     if (team) {
       for (const t of [0, 1]) {
@@ -922,47 +1193,123 @@
   $('menuBtn').onclick = () => toggleMenu();
   $('menuClose').onclick = () => toggleMenu(false);
   $('menu').addEventListener('mousedown', (e) => { if (e.target.id === 'menu') toggleMenu(false); });
-  $('modeGrid').innerHTML = Object.entries(MODES).map(([k, m]) => `<button data-v="${k}"><i>${m.icon}</i>${m.name}</button>`).join('');
-  $('modeGrid').querySelectorAll('button').forEach((b) => (b.onclick = () => { if (b.dataset.v !== modeKey()) cmd('mode', b.dataset.v); }));
   $('teamBtn').onclick = () => cmd('team');
-  $('targetSel').onchange = (e) => cmd('target', Number(e.target.value));
-  $('timeSel').onchange = (e) => cmd('time', Number(e.target.value));
-  $('mapSel').onchange = (e) => cmd('map', Number(e.target.value));
+  $('lobbyBtn').onclick = () => { cmd('lobby'); toggleMenu(false); };
   $('restartBtn').onclick = () => { cmd('restart'); toggleMenu(false); };
-  document.querySelectorAll('[data-bot]').forEach((b) => (b.onclick = () => cmd('addbot', b.dataset.bot)));
+  $('addBot').onclick = () => cmd('addbot', (S.info && S.info.settings.level) || 'normal');
   $('rmBot').onclick = () => cmd('rmbot');
   $('sfxBtn').onclick = () => { Sfx.toggleSfx(); refreshMenu(); };
   $('musicBtn').onclick = () => { Sfx.toggleMusic(); refreshMenu(); };
   $('camSeg').querySelectorAll('button').forEach((b) => (b.onclick = () => { setCam(b.dataset.v); refreshMenu(); }));
+  $('miniBtn').onclick = () => { settings.mini = !settings.mini; store.set('mini', settings.mini ? '1' : '0'); Render.setMinimap(settings.mini); refreshMenu(); };
   $('gfxBtn').onclick = () => { settings.gfx = settings.gfx === 'hi' ? 'lo' : 'hi'; store.set('gfx', settings.gfx); Render.setQuality(settings.gfx === 'hi'); refreshMenu(); };
   $('vibBtn').onclick = () => { settings.vib = !settings.vib; store.set('vib', settings.vib ? '1' : '0'); if (settings.vib) buzz(30); refreshMenu(); };
-  $('leaveBtn').onclick = () => { location.href = location.pathname + (S.local ? '' : '?room=' + encodeURIComponent(S.room) + keepParams()); };
+  const leave = () => { const kp = keepParams(); location.href = location.pathname + (kp ? '?' + kp.slice(1) : ''); };
+  $('leaveBtn').onclick = leave;
   function setCam(v) { settings.cam = v; store.set('cam', v); Render.setCamMode(v); }
+
+  // ---- 換坦克種類（選單、等待室、死亡畫面都有一排按鈕）
+  function buildClsRow(el) {
+    el.innerHTML = CLASS_LIST.map((id) => `<button type="button" data-cls="${id}" title="${CLASSES[id].desc}">${CLASSES[id].short}</button>`).join('');
+    el.querySelectorAll('[data-cls]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); pickClass(b.dataset.cls); }));
+  }
+  ['menuCls', 'wrCls', 'deadCls'].forEach((id) => buildClsRow($(id)));
+  function pickClass(id) {
+    if (!CLASSES[id]) return;
+    Profile.cls = id;
+    cmd('cls', id);
+  }
+  function refreshClsRows() {
+    const p = S.players.get(S.myId);
+    const cur = p && p.c ? p.c : Profile.cls, next = p ? p.nc : null;
+    document.querySelectorAll('.cls-row [data-cls]').forEach((b) => {
+      b.classList.toggle('on', b.dataset.cls === cur);
+      b.classList.toggle('next', b.dataset.cls === next);
+    });
+    setHTML('menuClsNote', next && CLASSES[next] ? `下次重生會換成「${CLASSES[next].name}」` : CLASSES[cur] ? `${CLASSES[cur].name}：${CLASSES[cur].desc}` : '');
+  }
 
   function refreshMenu() {
     const info = S.info;
     if (!info) return;
-    const mode = info.settings.mode, md = MODES[mode];
-    $('modeGrid').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === mode));
-    setHTML('modeDesc', `${md.icon} ${md.desc}`);
+    const s = info.settings, mode = s.mode, md = MODES[mode] || MODES.ffa;
+    setHTML('menuMode', `${md.icon} <b>${md.name}</b> · ${esc(info.mapName)} · ${goalText(s)}`);
     $('teamBtn').classList.toggle('hidden', !(md.team && !md.coop));
-    const topts = md.targets.map((v) => `<option value="${v}">${v ? `${v} ${md.unit}` : '無盡'}</option>`).join('');
-    const ts = $('targetSel');
-    if (ts.dataset.opts !== topts) { ts.innerHTML = topts; ts.dataset.opts = topts; }
-    ts.value = String(info.settings.target);
-    $('timeSel').value = String(info.settings.time);
-    $('timeSel').classList.toggle('hidden', mode === 'waves');
-    $('timeLabel').classList.toggle('hidden', mode === 'waves');
+    // 房間設定只有房主能改：模式 / 地圖 / 人數要回等待室換（開房的時候在大廳選好）
+    $('hostRow').classList.toggle('hidden', !S.host || info.state === 'waiting');
+    $('lobbyBtn').textContent = S.local ? '↩ 換模式 / 地圖' : '↩ 回等待室（換模式 / 地圖 / 人數）';
+    $('botRow').classList.toggle('hidden', !S.host);
     $('botLabel').textContent = mode === 'waves' ? '友軍電腦' : '電腦玩家';
-    const ms = $('mapSel');
-    const opts = '<option value="-1">🔁 輪替</option>' + info.maps.map((n, i) => `<option value="${i}">${esc(n)}</option>`).join('');
-    if (ms.dataset.opts !== opts) { ms.innerHTML = opts; ms.dataset.opts = opts; }
-    ms.value = String(info.settings.map);
+    const bots = info.players.filter((p) => p.bot && !p.e).length;
+    setHTML('botHint', `現在 ${bots} 台 · 難度 ${BOT_LV[s.level] || '普通'}${S.local ? '' : '（朋友進來時，滿 8 台會自動讓位）'}`);
+    $('inviteRow').classList.toggle('hidden', S.local);
     $('camSeg').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === settings.cam));
+    $('miniBtn').textContent = '小地圖：' + (settings.mini ? '開' : '關');
     $('gfxBtn').textContent = '畫質：' + (settings.gfx === 'hi' ? '高' : '省電');
     $('vibBtn').textContent = '震動：' + (settings.vib ? '開' : '關');
     $('sfxBtn').textContent = '音效：' + (Sfx.sfxOn ? '開' : '關');
     $('musicBtn').textContent = '音樂：' + (Sfx.musicOn ? '開' : '關');
+    refreshClsRows();
+  }
+
+  // ================================================================ 等待室
+  let wrUI = null;
+  $('wrLeave').onclick = leave;
+  $('wrStart').onclick = () => cmd('start');
+  $('wrTeam').onclick = () => cmd('team');
+  function refreshWaitRoom() {
+    const info = S.info;
+    const show = !!info && info.state === 'waiting';
+    $('waitroom').classList.toggle('hidden', !show);
+    if (!show) return;
+    if (!wrUI) wrUI = SetupUI($('wrSetup'), (k, v) => cmd(k, v), true);
+    const s = info.settings, md = MODES[s.mode] || MODES.ffa;
+    const w = info.wait || { need: s.players, have: 1, t: -1 };
+    const solo = S.local || s.players <= 1;
+    const list = info.players.filter((p) => !p.e);
+    const humans = list.filter((p) => !p.bot);
+    const need = solo ? 1 : w.need;
+    const full = humans.length >= need;
+    setHTML('wrHave', String(humans.length));
+    setHTML('wrNeed', String(need));
+    setHTML('wrTitle', w.t >= 0 ? '人到齊了，準備開打！' : solo ? '設定好就按「開打」' : full ? '人到齊了！' : `等待朋友加入…（還差 ${need - humans.length} 人）`);
+    setHTML('wrMode', `${md.icon} <b>${md.name}</b> · ${s.map >= 0 ? esc(MAP_NAMES[s.map]) : `地圖輪替（第一張：${esc(info.mapName)}）`} · ${goalText(s)}`);
+    const tag = (p) => {
+      const t = [];
+      if (p.id === info.host) t.push('<em class="host">👑<span> 房主</span></em>');
+      if (p.bot) t.push(`<em>🤖 ${BOT_LV[p.bot] || ''}</em>`);
+      t.push(`<em>${CLASSES[p.c] ? CLASSES[p.c].short : '中坦'}</em>`);
+      return t.join('');
+    };
+    const team = md.team && !md.coop;
+    let html = list.map((p) => `<div class="wr-p${p.id === S.myId ? ' me' : ''}"><span class="dot" style="background:${team ? TEAM_COLORS[p.team] : p.color}"></span><span class="nm">${esc(p.name)}${p.id === S.myId ? '（你）' : ''}</span>${tag(p)}${team ? `<span class="team" style="color:${TEAM_COLORS[p.team]}">${TEAM_NAMES[p.team]}</span>` : ''}</div>`).join('');
+    for (let i = humans.length; i < need; i++) html += '<div class="wr-p empty">等待加入…</div>';
+    setHTML('wrPlayers', html);
+    $('wrInvite').classList.toggle('hidden', S.local);
+    $('wrHost').classList.toggle('hidden', !S.host);
+    $('wrGuest').classList.toggle('hidden', S.host);
+    $('wrStart').classList.toggle('hidden', !S.host);
+    $('wrStart').disabled = w.t >= 0;
+    $('wrStart').textContent = w.t >= 0 ? '準備開打…' : solo ? '▶ 開打！' : full ? '▶ 開始' : '▶ 不等了，現在開始';
+    $('wrTeam').classList.toggle('hidden', !team);
+    if (S.host) wrUI.update(s, solo);
+    refreshClsRows();
+  }
+  // 倒數：每一幀用最後收到的秒數往下算，每過一秒嗶一聲
+  function tickWait() {
+    const info = S.info;
+    const w = info && info.state === 'waiting' ? info.wait : null;
+    if (!w || w.t < 0) {
+      if (S.waitSec !== -1) { S.waitSec = -1; $('wrCd').classList.add('hidden'); }
+      return;
+    }
+    const sec = Math.max(1, Math.ceil(w.t - (performance.now() - S.infoAt) / 1000));
+    if (sec !== S.waitSec) {
+      S.waitSec = sec;
+      $('wrCd').textContent = `${sec} 秒後開打！`;
+      $('wrCd').classList.remove('hidden');
+      Sfx.play('countdown', false);
+    }
   }
 
   function keepParams() {
@@ -973,9 +1320,11 @@
     return out;
   }
 
+  // 邀請連結：選單裡一份、等待室一份
   function buildInvite() {
     if (S.local) {
-      $('inviteLinks').innerHTML = '<div style="font-size:12.5px;color:#b7c0cc;line-height:1.6">現在是<b>單人模式</b>，只有你和電腦。<br>想跟朋友一起玩：按下面的「離開房間」回大廳，再按「開戰！」開房。</div>';
+      $('inviteLinks').innerHTML = '<div style="font-size:12.5px;color:#b7c0cc;line-height:1.6">現在是<b>單人模式</b>，只有你和電腦。<br>想跟朋友一起玩：按下面的「離開房間」回大廳，再按「開房間」。</div>';
+      $('wrInvite').innerHTML = '';
       return;
     }
     const links = [];
@@ -985,17 +1334,21 @@
     if (!P2P) for (const ip of S.lan) { const u = `http://${ip}:${S.port}/${q}`; if (!links.includes(u)) links.push(u); }
     if (!links.length) links.push(location.origin + location.pathname + q);
     const canShare = !!navigator.share;
-    $('inviteLinks').innerHTML = links.map((u) => `<div class="invite-link"><code>${esc(u)}</code><button class="small" data-copy="${esc(u)}">複製</button>${canShare ? `<button class="small" data-share="${esc(u)}">分享</button>` : ''}</div>`).join('') +
+    const rows = links.map((u) => `<div class="invite-link"><code>${esc(u)}</code><button class="small" data-copy="${esc(u)}">複製</button>${canShare ? `<button class="small" data-share="${esc(u)}">分享</button>` : ''}</div>`).join('');
+    $('inviteLinks').innerHTML = rows +
       `<div style="font-size:11px;color:#8b96a5">${P2P ? '把連結傳給朋友（LINE、IG 都可以），點開就能玩，手機電腦都行。你是房主的話請不要關掉這個畫面。' : '室友要連同一個 Wi-Fi；開這個網址就會進到同一個房間'}</div>`;
-    $('inviteLinks').querySelectorAll('[data-share]').forEach((b) => (b.onclick = () => {
-      navigator.share({ title: '坦克大亂鬥', text: `來跟我打坦克！房間 ${S.room}`, url: b.dataset.share }).catch(() => {});
-    }));
-    $('inviteLinks').querySelectorAll('[data-copy]').forEach((b) => (b.onclick = () => {
-      const u = b.dataset.copy;
-      const done = () => { b.textContent = '已複製！'; setTimeout(() => (b.textContent = '複製'), 1200); };
-      if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(u).then(done, () => fallbackCopy(u, done));
-      else fallbackCopy(u, done);
-    }));
+    $('wrInvite').innerHTML = `<div class="wr-code">房間代碼<b>${esc(S.room)}</b>　${P2P ? '把連結傳給朋友，點開就能加入' : '同一個 Wi-Fi 的朋友開下面的網址就能加入'}</div>${rows}`;
+    for (const box of [$('inviteLinks'), $('wrInvite')]) {
+      box.querySelectorAll('[data-share]').forEach((b) => (b.onclick = () => {
+        navigator.share({ title: '坦克大亂鬥', text: `來跟我打坦克！房間 ${S.room}`, url: b.dataset.share }).catch(() => {});
+      }));
+      box.querySelectorAll('[data-copy]').forEach((b) => (b.onclick = () => {
+        const u = b.dataset.copy;
+        const done = () => { b.textContent = '已複製！'; setTimeout(() => (b.textContent = '複製'), 1200); };
+        if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(u).then(done, () => fallbackCopy(u, done));
+        else fallbackCopy(u, done);
+      }));
+    }
   }
   function fallbackCopy(text, done) {
     const ta = document.createElement('textarea');
@@ -1005,16 +1358,20 @@
   }
 
   // ---------------- 手機專用按鈕
+  // 輕點右半邊：自動瞄準最近的敵人（隔著牆的比較不優先；自走砲不管牆，但要在射程內）
   Touch.autoAim = () => {
     const me = (S.visible || []).find((t) => t.me);
     if (!me) return null;
+    const arty = isArty();
     let best = null, bd = Infinity;
     for (const t of S.visible) {
       if (t.me || t.ally) continue;
-      const d = Math.hypot(t.x - me.x, t.y - me.y) * (Core.lineClear(S.map, me.x, me.y, t.x, t.y) ? 1 : 3);
+      const dist = Math.hypot(t.x - me.x, t.y - me.y);
+      const d = arty ? dist * (dist > C.ARTY_MAX ? 2 : 1) : dist * (Core.lineClear(S.map, me.x, me.y, t.x, t.y) ? 1 : 3);
       if (d < bd) { bd = d; best = t; }
     }
-    return best ? Math.atan2(best.y - me.y, best.x - me.x) : null;
+    if (!best) return null;
+    return { a: Math.atan2(best.y - me.y, best.x - me.x), d: Math.hypot(best.x - me.x, best.y - me.y) };
   };
   Touch.rapid = () => !!(S.you && (S.you.rapidT > 0 || S.you.sp === 'flame'));
   $('btnScore').addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); S.scoreToggle = !S.scoreToggle; refreshScoreUI(); });
