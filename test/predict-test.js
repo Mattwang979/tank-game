@@ -9,14 +9,14 @@ const { C, K, TILE } = Core;
 const LAT = 9; // 單程延遲（tick），9 tick = 150ms
 let failed = false;
 
-function run(mapName, start, script) {
+function run(mapName, start, script, cls) {
   const room = new Room('PRED');
   room.settings.map = MAPS.findIndex((m) => m.name === mapName);
   room.startMatch();
   room.puTimer = Infinity; // 不要刷道具：撿到加速引擎本來就會有短暫的預測誤差，這裡只測地形
-  const p = room.addPlayer({ name: 'p', color: '#ff4d4d' });
+  const p = room.addPlayer({ name: 'p', color: '#ff4d4d', cls });
   Object.assign(p, { x: start[0] * TILE + 20, y: start[1] * TILE + 20, vx: 0, vy: 0, protectT: 1e9 });
-  const fields = ['x', 'y', 'vx', 'vy', 'ha', 'dashT', 'dashCd', 'slideT', 'portLock'];
+  const fields = ['x', 'y', 'vx', 'vy', 'ha', 'dashT', 'dashCd', 'dcd', 'slideT', 'portLock'];
   const snap = () => Object.assign(Object.fromEntries(fields.map((f) => [f, p[f]])), { ack: p.ack, boost: p.boostT > 0, spd: p.spd, r: p.r });
   let pred = snap();
   const pending = [], toServer = [], toClient = [];
@@ -59,9 +59,14 @@ const cases = [
   ['傳送門（亂開 40 秒）', '傳送迷城', [2, 2], rnd(2400, 7)],
   ['加速帶（亂開 40 秒）', '極速賽道', [4, 4], rnd(2400, 11)],
   ['冰面（亂開 40 秒）', '冰封湖面', [6, 6], rnd(2400, 3)],
+  // 不同坦克種類：速度、車身大小、衝刺冷卻都不一樣，預測也要一致
+  ['輕坦（傳送門 + 衝刺）', '傳送迷城', [2, 2], rnd(2400, 5), 'light'],
+  ['重坦（加速帶 + 衝刺）', '極速賽道', [4, 4], rnd(2400, 13), 'heavy'],
+  ['自走砲（冰面）', '冰封湖面', [6, 6], rnd(2400, 17), 'spg'],
+  ['驅逐戰車（十字戰場）', '十字戰場', [2, 2], rnd(2400, 19), 'td'],
 ];
-for (const [name, map, start, script] of cases) {
-  const r = run(map, start, script);
+for (const [name, map, start, script, cls] of cases) {
+  const r = run(map, start, script, cls);
   const ok = r.maxJump < 0.5;
   if (!ok) failed = true;
   console.log(`${ok ? '✓' : '✗'} ${name}：最大校正 ${r.maxJump.toFixed(3)}px（傳送 ${r.ports} 次、加速帶 ${r.pads} 次、冰上 ${(r.ice / 60).toFixed(1)} 秒）`);

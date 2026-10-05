@@ -43,7 +43,7 @@
     RAPID_CD: 0.11,
 
     RAIL_CD: 0.6,
-    RAIL_DMG: 75,
+    RAIL_DMG: 50,
     RAIL_BOUNCES: 2,
     RAIL_LEN: 1800,
 
@@ -60,10 +60,35 @@
     PELLET_LIFE: 0.3,
     PELLET_DMG: 13,
 
-    FLAME_RANGE: 155,
-    FLAME_ARC: 0.36,
-    FLAME_DPS: 80,
+    FLAME_RANGE: 230,
+    FLAME_ARC: 0.34,
+    FLAME_DPS: 125,
     FLAME_FUEL: 4.5,
+
+    // 自走砲：拋射砲彈越過牆壁，飛行時間 = ARTY_T0 + 距離 / ARTY_SPD
+    ARTY_MIN: 90,
+    ARTY_MAX: 600,
+    ARTY_RADIUS: 72,
+    ARTY_T0: 0.5,
+    ARTY_SPD: 650,
+
+    // 呼叫空襲：AIR_BOMBS 顆炸彈，每顆間隔 AIR_GAP 秒開始預警，預警 AIR_WARN 秒後落地
+    AIR_BOMBS: 12,
+    AIR_GAP: 0.22,
+    AIR_WARN: 1.3,
+    AIR_RADIUS: 74,
+    AIR_DMG: 50,
+    AIR_SPREAD: 130,
+    AIR_MAX: 2,
+
+    // 空投補給：開場 DROP_FIRST 秒後第一次，之後每 DROP_MIN~DROP_MAX 秒一次，降落傘落下 DROP_FALL 秒
+    DROP_FIRST: 25,
+    DROP_MIN: 40,
+    DROP_MAX: 55,
+    DROP_FALL: 4,
+    DROP_GROUND: 2,
+
+    SUPPLY_HEAL: 35,
 
     CLOAK_TIME: 9,
     BOUNCE_TIME: 12,
@@ -94,8 +119,20 @@
     HILL_MOVE: 40,
   };
 
-  // 輸入按鍵位元
-  const K = { UP: 1, DOWN: 2, LEFT: 4, RIGHT: 8, FIRE: 16, MINE: 32, DASH: 64 };
+  // 輸入按鍵位元（CALL：呼叫空襲）
+  const K = { UP: 1, DOWN: 2, LEFT: 4, RIGHT: 8, FIRE: 16, MINE: 32, DASH: 64, CALL: 128 };
+
+  // 坦克種類。hp 血量、r 車身半徑、spd 速度倍率、dcd 衝刺冷卻、ammo 彈藥上限、regen 每發裝填秒數、
+  // fcd 開砲間隔、dmg 砲彈傷害、bspd 砲彈速度、kb 被炸飛的程度、see 看穿草叢 / 隱形的距離、mineSee 看到地雷的距離
+  // arty：自走砲（拋射）；bars：大廳顯示的能力值（耐久、速度、火力、射程，滿分 5）
+  const CLASSES = {
+    medium: { name: '中型坦克', short: '中坦', desc: '各方面平均，最好上手', hp: 100, r: 15, spd: 1, dcd: 2.2, ammo: 4, regen: 0.6, fcd: 0.22, dmg: 34, bspd: 520, kb: 1, see: 110, mineSee: 80, bars: [3, 3, 3, 3] },
+    heavy: { name: '重型坦克', short: '重坦', desc: '超耐打、砲彈很痛，但又慢又大台', hp: 165, r: 17.5, spd: 0.76, dcd: 3, ammo: 3, regen: 0.85, fcd: 0.34, dmg: 46, bspd: 470, kb: 0.45, see: 110, mineSee: 80, bars: [5, 1.5, 4, 3] },
+    light: { name: '輕型坦克', short: '輕坦', desc: '最快、衝刺冷卻短，看得穿草叢和地雷，但很脆', hp: 70, r: 13, spd: 1.28, dcd: 1.3, ammo: 5, regen: 0.45, fcd: 0.16, dmg: 25, bspd: 580, kb: 1.3, see: 210, mineSee: 150, bars: [1.5, 5, 2, 3] },
+    spg: { name: '自走砲', short: '自走砲', desc: '砲彈拋過牆壁、落地爆炸，敵人看得到落點；近戰很弱', hp: 80, r: 15.5, spd: 0.86, dcd: 2.6, ammo: 2, regen: 1.6, fcd: 1, dmg: 58, bspd: 0, kb: 1, see: 110, mineSee: 80, arty: true, bars: [2, 2, 4.5, 5] },
+    td: { name: '驅逐戰車', short: '驅逐', desc: '高速穿甲彈一發超痛，但彈藥少、裝填慢', hp: 95, r: 16, spd: 0.92, dcd: 2.4, ammo: 2, regen: 1.15, fcd: 0.5, dmg: 58, bspd: 900, kb: 0.8, see: 110, mineSee: 80, bars: [2.5, 2.5, 5, 4.5] },
+  };
+  const CLASS_LIST = ['medium', 'heavy', 'light', 'spg', 'td'];
 
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
   function wrapAngle(a) {
@@ -167,7 +204,7 @@
       let dx = mx, dy = my;
       if (!len) { dx = Math.cos(t.ha); dy = Math.sin(t.ha); }
       t.vx = dx * C.DASH_SPEED; t.vy = dy * C.DASH_SPEED;
-      t.dashT = C.DASH_TIME; t.dashCd = C.DASH_CD;
+      t.dashT = C.DASH_TIME; t.dashCd = t.dcd || C.DASH_CD;
       t.justDashed = true;
     }
     if (t.dashT > 0) {
@@ -336,7 +373,7 @@
   const encodeTiles = (arr) => Array.from(arr, (v) => String.fromCharCode(48 + v)).join('');
 
   return {
-    TILE, T, C, K, PAD_DIR,
+    TILE, T, C, K, PAD_DIR, CLASSES, CLASS_LIST,
     clamp, wrapAngle, angDiff, lerpAngle,
     tileAt, blocksTank, blocksBullet, portalPartner,
     resolveTank, stepTank, reflect, stepBullet, castRay, lineClear, segPointDist,

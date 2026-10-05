@@ -58,7 +58,8 @@ const getRoom = (code) => {
 const wss = new WebSocketServer({ server, maxPayload: 16 * 1024 });
 
 wss.on('connection', (ws) => {
-  const client = createClient(ws, getRoom, () => ({ lan: lanIPs(), port: PORT }));
+  // 第四個參數：「加入房間」的時候房間不存在就回 noroom（不要幫他開一間空房）
+  const client = createClient(ws, getRoom, () => ({ lan: lanIPs(), port: PORT }), (code) => rooms.has(code));
   ws.on('message', (data) => client.message(String(data)));
   ws.on('close', () => client.close());
   ws.on('error', () => {});

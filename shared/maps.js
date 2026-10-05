@@ -203,7 +203,76 @@
       { x: (w - 1 - f[0]) * TILE + TILE / 2, y: (h - 1 - f[1]) * TILE + TILE / 2 },
     ];
     const hills = (def.hills || [[w / 2, h / 2]]).map(([x, y]) => ({ x: x * TILE, y: y * TILE }));
-    return { name: def.name, theme: def.theme || 'grass', w, h, tiles, hp, spawns, powerSpots, flags, hills, rows };
+    const m = { name: def.name, theme: def.theme || 'grass', w, h, tiles, hp, spawns, powerSpots, flags, hills, rows };
+    const s0 = spawns[0];
+    m.reach = reachable(m, Math.floor(s0.y / TILE) * w + Math.floor(s0.x / TILE));
+    const sp = pickSpots(m, 8);
+    m.supplySpots = sp.supply;
+    m.dropSpots = sp.drops;
+    return m;
+  }
+
+  // 坦克走得到的格子（踩進傳送門會被傳到對面）
+  function reachable(m, start) {
+    const { w, h, tiles } = m;
+    const seen = new Uint8Array(w * h);
+    const q = [start];
+    seen[start] = 1;
+    while (q.length) {
+      let i = q.pop();
+      let x = i % w, y = (i / w) | 0;
+      if (tiles[i] === T.PORTAL) { [x, y] = Core.portalPartner(m, x, y); i = y * w + x; seen[i] = 1; }
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const j = ny * w + nx;
+        if (!seen[j] && !Core.blocksTank(tiles[j])) { seen[j] = 1; q.push(j); }
+      }
+    }
+    return seen;
+  }
+
+  // 補給包的位置：四周沒有障礙的空地、離出生點 / 道具點 / 旗座有點距離、180° 對稱成對出現，
+  // 用「最遠點取樣」平均分散（結果是固定的，每次載入同一張地圖都一樣）。
+  // 順便回傳空投可以掉落的格子（所有開闊、走得到的空地）。
+  function pickSpots(m, n) {
+    const { w, h, tiles } = m;
+    const open = (x, y) => [[1, 0], [-1, 0], [0, 1], [0, -1]].every(([dx, dy]) => !Core.blocksTank(Core.tileAt(m, x + dx, y + dy)));
+    const avoid = m.spawns.map((s) => [s, 3.5 * TILE]).concat(m.powerSpots.map((s) => [s, 3 * TILE]), m.flags.map((s) => [s, 2.5 * TILE]));
+    const drops = [], byKey = new Map();
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = y * w + x;
+        if (tiles[i] !== T.FLOOR || !m.reach[i] || !open(x, y)) continue;
+        const c = { x: x * TILE + TILE / 2, y: y * TILE + TILE / 2, i, p: (h - 1 - y) * w + (w - 1 - x) };
+        drops.push({ x: c.x, y: c.y });
+        if (avoid.some(([s, r]) => Math.hypot(s.x - c.x, s.y - c.y) < r)) continue;
+        // 跟自己的對稱點太近（地圖正中央附近）的不要，不然兩包會黏在一起
+        if (Math.hypot((w - 1 - 2 * x) * TILE, (h - 1 - 2 * y) * TILE) < 4 * TILE) continue;
+        byKey.set(i, c);
+      }
+    }
+    const chosen = [];
+    const take = (c) => {
+      chosen.push(c); byKey.delete(c.i);
+      const p = byKey.get(c.p);
+      if (p) { chosen.push(p); byKey.delete(p.i); }
+    };
+    const cx = (w * TILE) / 2, cy = (h * TILE) / 2;
+    let first = null, fd = Infinity;
+    for (const c of byKey.values()) { const d = Math.hypot(c.x - cx, c.y - cy); if (d < fd) { fd = d; first = c; } }
+    if (first) take(first);
+    while (chosen.length < n && byKey.size) {
+      let best = null, bd = -1;
+      for (const c of byKey.values()) {
+        let d = Infinity;
+        for (const o of chosen) d = Math.min(d, Math.hypot(o.x - c.x, o.y - c.y));
+        for (const o of m.powerSpots) d = Math.min(d, Math.hypot(o.x - c.x, o.y - c.y) * 1.3);
+        if (d > bd) { bd = d; best = c; }
+      }
+      take(best);
+    }
+    return { supply: chosen.map((c) => ({ x: c.x, y: c.y })), drops };
   }
 
   return { MAPS, parseMap, expand };

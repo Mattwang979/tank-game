@@ -56,11 +56,30 @@ for (const def of MAPS) {
     if (h.x < TILE || h.y < TILE || h.x > (m.w - 1) * TILE || h.y > (m.h - 1) * TILE) errs.push('山頭在地圖外');
     else if (Core.blocksTank(m.tiles[i]) || !seen[i]) errs.push(`山頭 (${h.x / TILE},${h.y / TILE}) 站不上去`);
   }
+  // 補給包點：要在走得到的空地上、不能重複、要成對（180° 對稱）
+  if (m.supplySpots.length < 4) errs.push(`補給包點只有 ${m.supplySpots.length} 個`);
+  const sk = new Set();
+  for (const s of m.supplySpots) {
+    const i = cell(s);
+    if (m.tiles[i] !== T.FLOOR || !seen[i]) errs.push(`補給包點 (${Math.floor(s.x / TILE)},${Math.floor(s.y / TILE)}) 不在走得到的空地上`);
+    if (sk.has(i)) errs.push('補給包點重複');
+    sk.add(i);
+  }
+  for (const s of m.supplySpots) {
+    const p = (m.h - 1 - Math.floor(s.y / TILE)) * m.w + (m.w - 1 - Math.floor(s.x / TILE));
+    if (!sk.has(p)) errs.push(`補給包點 (${Math.floor(s.x / TILE)},${Math.floor(s.y / TILE)}) 沒有對稱的另一個`);
+  }
+  if (m.dropSpots.length < 30) errs.push(`空投可以掉的空地只有 ${m.dropSpots.length} 格`);
   let unreachableFloor = 0;
   for (let i = 0; i < m.tiles.length; i++) if (!Core.blocksTank(m.tiles[i]) && !seen[i]) unreachableFloor++;
   if (unreachableFloor) errs.push(`有 ${unreachableFloor} 格空地走不到`);
-  console.log(`${errs.length ? '✗' : '✓'} ${def.name}（${m.theme}）: 出生點 ${m.spawns.length}，道具點 ${m.powerSpots.length}，山頭 ${m.hills.length}，傳送門 ${portals} ${errs.join('; ')}`);
+  console.log(`${errs.length ? '✗' : '✓'} ${def.name}（${m.theme}）: 出生點 ${m.spawns.length}，道具點 ${m.powerSpots.length}，補給包點 ${m.supplySpots.length}，山頭 ${m.hills.length}，傳送門 ${portals} ${errs.join('; ')}`);
   if (errs.length) ok = false;
-  if (process.argv.includes('-v')) console.log(m.rows.join('\n') + '\n');
+  if (process.argv.includes('-v')) {
+    // 補給包點用 + 標出來
+    const rows = m.rows.map((r) => r.split(''));
+    for (const s of m.supplySpots) rows[Math.floor(s.y / TILE)][Math.floor(s.x / TILE)] = '+';
+    console.log(rows.map((r) => r.join('')).join('\n') + '\n');
+  }
 }
 process.exit(ok ? 0 : 1);
