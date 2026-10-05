@@ -1857,6 +1857,8 @@
         if (msg.t === 'join' && !player) {
           const code = clean(msg.room, 12).toUpperCase().replace(/[^A-Z0-9]/g, '') || 'TANK';
           if (msg.join && hasRoom && !hasRoom(code)) { sock.send(JSON.stringify({ t: 'noroom', room: code })); return; }
+          // 開新房間但代碼已經有人在用 → 叫他換一個代碼（不要跑進別人的房間）
+          if (msg.create && hasRoom && hasRoom(code) && getRoom(code).hostId) { sock.send(JSON.stringify({ t: 'taken', room: code })); return; }
           room = getRoom(code);
           const fresh = !room.hostId;
           player = room.addPlayer({ name: clean(msg.name, 12) || '無名坦克', color: msg.color, skin: msg.skin, cls: msg.cls, ws: sock });

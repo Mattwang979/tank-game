@@ -32,14 +32,17 @@ const Profile = (() => {
     { id: 'wave5', icon: '🛡️', name: '守住防線', desc: '生存闖關撐過第 5 波', ok: (s) => s.bestWave >= 5 },
     { id: 'wave15', icon: '🏰', name: '不朽要塞', desc: '生存闖關撐過第 15 波', ok: (s) => s.bestWave >= 15 },
     { id: 'boss', icon: '👹', name: '屠魔勇者', desc: '親手擊倒 BOSS', ok: (s) => s.bossK >= 1 },
+    { id: 'air', icon: '✈️', name: '空中支援', desc: '用空襲炸掉敵人', ok: (s) => s.airK >= 1 },
+    { id: 'crate', icon: '📦', name: '空投獵人', desc: '搶到 5 個空投', ok: (s) => s.crates >= 5 },
+    { id: 'arty', icon: '🎇', name: '砲兵指揮官', desc: '用自走砲擊殺 10 次', ok: (s) => s.artyK >= 10 },
     { id: 'vet', icon: '🎮', name: '老兵', desc: '完成 20 場比賽', ok: (s) => s.games >= 20 },
   ];
 
-  const XP = { kill: 10, rico: 6, boss: 40, cap: 30, ret: 10, round: 25, wave: 15, game: 20, win: 50, ach: 30 };
+  const XP = { kill: 10, rico: 6, boss: 40, cap: 30, ret: 10, round: 25, wave: 15, game: 20, win: 50, ach: 30, crate: 15 };
 
   const blank = () => ({
     xp: 0, skin: 'classic', ach: {},
-    stats: { kills: 0, deaths: 0, games: 0, wins: 0, rico: 0, mineK: 0, barrelK: 0, caps: 0, kothWins: 0, brWins: 0, bestWave: 0, bestStreak: 0, bossK: 0 },
+    stats: { kills: 0, deaths: 0, games: 0, wins: 0, rico: 0, mineK: 0, barrelK: 0, caps: 0, kothWins: 0, brWins: 0, bestWave: 0, bestStreak: 0, bossK: 0, airK: 0, crates: 0, artyK: 0 },
   });
 
   function load() {
@@ -111,6 +114,8 @@ const Profile = (() => {
     get level() { return levelOf(data.xp); },
     get session() { return session; },
     newSession,
+    get cls() { try { const v = localStorage.getItem('tb_cls'); return Core.CLASSES[v] ? v : 'medium'; } catch (e) { return 'medium'; } },
+    set cls(v) { try { if (Core.CLASSES[v]) localStorage.setItem('tb_cls', v); } catch (e) {} },
     unlocked(skinId) { const s = SKINS.find((x) => x.id === skinId); return !!s && levelOf(data.xp).lv >= s.lv; },
     get skin() { return this.unlocked(data.skin) ? data.skin : 'classic'; },
     set skin(v) { if (this.unlocked(v)) { data.skin = v; save(); } },
@@ -122,12 +127,15 @@ const Profile = (() => {
       if (rico) { bump('rico'); gain(XP.rico, '反彈擊殺加分'); }
       if (weapon === 'mine') bump('mineK');
       if (weapon === 'barrel') bump('barrelK');
+      if (weapon === 'air') bump('airK');
+      if (weapon === 'arty') bump('artyK');
       if (boss) { bump('bossK'); gain(XP.boss, '擊倒 BOSS'); }
       checkAch();
     },
     death() { bump('deaths'); save(); },
     streak(n) { max('bestStreak', n); checkAch(); },
     capture() { bump('caps'); gain(XP.cap, '搶旗得分'); checkAch(); },
+    crate() { bump('crates'); gain(XP.crate, '搶到空投'); checkAch(); },
     returned() { gain(XP.ret, '奪回旗子'); },
     roundWin() { bump('brWins'); gain(XP.round, '大逃殺吃雞'); checkAch(); },
     waveCleared(n) { max('bestWave', n); gain(XP.wave, '闖關過關'); checkAch(); },

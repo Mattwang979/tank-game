@@ -5,6 +5,7 @@
  *          其他人用 WebRTC（PeerJS）直接連到房主。網頁可以放在 GitHub Pages 這種靜態空間。
  *  - local：單人模式，不連網路，自己的瀏覽器跑模擬（打電腦）
  * 三種模式對 main.js 提供同樣的介面：send(obj)、handlers.onOpen / onMessage / onClose / onStatus
+ * （P2P 另外有 onNoRoom：加入的房間不存在；onTaken：開房的代碼被用走了）
  */
 const Net = (() => {
   const PREFIX = 'tankbrawl-v1-';
@@ -14,10 +15,15 @@ const Net = (() => {
 
   function ws(room, h) {
     const sock = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`);
+    let closed = false;
     sock.onopen = () => h.onOpen();
     sock.onmessage = (e) => { try { h.onMessage(JSON.parse(e.data)); } catch (err) { console.error(err); } };
-    sock.onclose = () => h.onClose('伺服器斷線了');
-    return { role: 'server', send(o) { if (sock.readyState === 1) sock.send(JSON.stringify(o)); } };
+    sock.onclose = () => { if (!closed) h.onClose('伺服器斷線了'); };
+    return {
+      role: 'server',
+      send(o) { if (sock.readyState === 1) sock.send(JSON.stringify(o)); },
+      close() { closed = true; try { sock.close(); } catch (e) {} },
+    };
   }
 
   function peerOptions() {
@@ -30,17 +36,22 @@ const Net = (() => {
     return { debug: 0, config: ice };
   }
 
-  function p2p(room, h) {
+  // opts.create：開新房間（直接當房主，代碼被用走了就叫 onTaken 換一個）
+  // opts.join：加入朋友的房間（找不到就叫 onNoRoom，不會自己變成房主）
+  function p2p(room, h, opts) {
     if (typeof Peer === 'undefined') { h.onStatus('載入連線模組失敗，請重新整理'); return null; }
-    const api = { role: null, send() {} };
-    const opts = peerOptions();
+    opts = opts || {};
+    let cur = null; // 目前用的 Peer（換房間代碼重試、或是放棄的時候要關掉）
+    const api = { role: null, send() {}, close() { try { if (cur) cur.destroy(); } catch (e) {} } };
+    const popts = peerOptions();
     const id = PREFIX + room;
     let tries = 0;
 
     function asClient() {
       if (++tries > 4) return h.onStatus('連線失敗，請重新整理再試一次');
       h.onStatus('尋找房間中…');
-      const peer = new Peer(opts);
+      const peer = new Peer(popts);
+      cur = peer;
       let settled = false;
       const timer = setTimeout(() => {
         if (settled) return;
@@ -65,11 +76,12 @@ const Net = (() => {
       peer.on('error', (err) => {
         if (settled) return;
         if (err.type === 'peer-unavailable') {
-          // 還沒有人開這個房間 → 自己當房主
           settled = true;
           clearTimeout(timer);
           peer.destroy();
-          asHost();
+          // 加入朋友的房間卻找不到 → 告訴玩家；不然（舊的連結）就自己當房主
+          if (opts.join && h.onNoRoom) h.onNoRoom();
+          else asHost();
         } else if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') {
           settled = true;
           clearTimeout(timer);
@@ -81,12 +93,14 @@ const Net = (() => {
     function asHost() {
       if (++tries > 4) return h.onStatus('建立房間失敗，請重新整理再試一次');
       h.onStatus('建立房間中…');
-      const peer = new Peer(id, opts);
+      const peer = new Peer(id, popts);
+      cur = peer;
       peer.on('open', () => {
         if (api.role) return;
         api.role = 'host';
         const game = new TBGame.Room(room);
         startLoop(game);
+        if (/[?&]debug\b/.test(location.search)) window.__room = game; // 測試用
         // 房主自己也是一個玩家：用假的 socket 直接對接
         const local = {
           readyState: 1, bufferedAmount: 0,
@@ -111,12 +125,18 @@ const Net = (() => {
       peer.on('disconnected', () => { if (api.role === 'host' && !peer.destroyed) setTimeout(() => { try { peer.reconnect(); } catch (e) {} }, 1000); });
       peer.on('error', (err) => {
         if (api.role) return;
-        if (err.type === 'unavailable-id') { peer.destroy(); asClient(); } // 同時有人開了同一間 → 改當玩家加入
+        if (err.type === 'unavailable-id') {
+          peer.destroy();
+          // 開新房間但代碼剛好被用走了 → 換一個代碼；舊流程（同時有人開了同一間）→ 改當玩家加入
+          if (opts.create && h.onTaken) h.onTaken();
+          else asClient();
+        }
         else h.onStatus('建立房間失敗：' + err.type);
       });
     }
 
-    asClient();
+    if (opts.create) asHost();
+    else asClient();
     return api;
   }
 
@@ -158,7 +178,7 @@ const Net = (() => {
     mode,
     connect(room, handlers, opts) {
       if (opts && opts.local) return local(room, handlers);
-      return mode() === 'ws' ? ws(room, handlers) : p2p(room, handlers);
+      return mode() === 'ws' ? ws(room, handlers) : p2p(room, handlers, opts);
     },
   };
 })();

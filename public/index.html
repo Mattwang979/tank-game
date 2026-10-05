@@ -31,15 +31,18 @@
       <div class="dead-title" id="deadTitle">💀 被擊毀！</div>
       <div id="deathby"></div>
       <div id="respawn"></div>
+      <div class="cls-row" id="deadCls"></div>
     </div>
 
     <div id="bottomhud">
       <div class="hud-block hp-block">
+        <div class="hud-label" id="clsLabel">中型坦克</div>
         <div id="hpbar"><div id="hpfill"></div><div id="shieldfill"></div><span id="hptext">100</span></div>
       </div>
       <div class="hud-block"><div class="hud-label" id="ammoLabel">砲彈</div><div id="ammo"></div></div>
       <div class="hud-block"><div class="hud-label">地雷 <kbd>右鍵</kbd></div><div id="mines"></div></div>
       <div class="hud-block"><div class="hud-label">衝刺 <kbd>Space</kbd></div><div id="dash"><div id="dashfill"></div></div></div>
+      <div class="hud-block hidden" id="airBlock"><div class="hud-label">空襲 <kbd>Q</kbd></div><div id="air"></div></div>
     </div>
     <div id="buffs"></div>
 
@@ -47,52 +50,77 @@
     <div id="touchui" class="hidden">
       <div id="touchzone"></div>
       <div id="stickL" class="stick"><div class="knob"></div><span class="stick-hint">移動</span></div>
-      <div id="stickR" class="stick"><div class="knob"></div><span class="stick-hint">拖曳瞄準<br>放開開砲</span></div>
+      <div id="stickR" class="stick"><div class="knob"></div><span class="stick-hint" id="stickRHint">拖曳瞄準<br>放開開砲</span></div>
       <button id="btnDash" class="tbtn"><span>⚡</span><i>衝刺</i></button>
       <button id="btnMine" class="tbtn"><span>💣</span><i>地雷</i><b id="mineBadge">3</b></button>
+      <button id="btnAir" class="tbtn hidden"><span>📡</span><i>空襲</i><b id="airBadge">1</b></button>
       <button id="btnScore" class="tbtn small-t">🏆</button>
       <button id="btnTaunt" class="tbtn small-t">💬</button>
       <div id="tauntMenu" class="hidden"></div>
     </div>
     <button id="menuBtn" title="選單 (Esc)">⚙</button>
-    <div id="tabhint"><kbd>Tab</kbd> 計分板　<kbd>Esc</kbd> 選單 / 加電腦 / 換模式　<kbd>1</kbd>~<kbd>5</kbd> 嗆聲</div>
+    <div id="tabhint"><kbd>Tab</kbd> 計分板　<kbd>Esc</kbd> 選單 / 換坦克　<kbd>Q</kbd> 空襲　<kbd>1</kbd>~<kbd>5</kbd> 嗆聲</div>
 
     <div id="scoreboard" class="hidden"></div>
     <div id="results" class="hidden"></div>
 
+    <!-- 等待室：開房之後等朋友進來，人到齊自動開始 -->
+    <div id="waitroom" class="hidden">
+      <div class="panel wr-panel">
+        <div class="wr-head">
+          <div class="wr-count"><b id="wrHave">1</b><span>/</span><b id="wrNeed">2</b></div>
+          <div class="wr-titles">
+            <div class="wr-title" id="wrTitle">等待朋友加入…</div>
+            <div class="wr-mode" id="wrMode"></div>
+          </div>
+        </div>
+        <div class="wr-cd hidden" id="wrCd"></div>
+        <div class="wr-invite" id="wrInvite"></div>
+        <div class="wr-players" id="wrPlayers"></div>
+        <div class="wr-me">
+          <div class="su-label">我的坦克 <span class="hint">（隨時可以換）</span></div>
+          <div class="cls-row" id="wrCls"></div>
+          <button class="small hidden" id="wrTeam">換隊</button>
+        </div>
+        <div class="wr-host" id="wrHost">
+          <div class="su-label wr-host-title">👑 房主設定 <span class="hint">（只有你看得到）</span></div>
+          <div id="wrSetup"></div>
+        </div>
+        <div class="wr-guest" id="wrGuest">房主正在設定，人到齊就會自動開始 ⏳</div>
+        <div class="wr-actions">
+          <button class="small warn" id="wrLeave">離開房間</button>
+          <button class="big-go" id="wrStart">▶ 立刻開始</button>
+        </div>
+      </div>
+    </div>
+
     <div id="menu" class="hidden">
       <div class="panel">
-        <div class="panel-head"><h2>⚙ 房間設定</h2><button class="close" id="menuClose">✕</button></div>
-        <div class="row invite">
-          <div class="label">邀請朋友</div>
-          <div id="inviteLinks"></div>
-        </div>
-        <div class="row mode-row">
-          <div class="label">模式</div>
-          <div class="mode-grid" id="modeGrid"></div>
-          <div class="mode-desc" id="modeDesc"></div>
+        <div class="panel-head"><h2>⚙ 選單</h2><button class="close" id="menuClose">✕</button></div>
+        <div class="row">
+          <div class="label">這一場</div>
+          <div class="menu-mode" id="menuMode"></div>
           <button id="teamBtn" class="small">換隊</button>
         </div>
-        <div class="row">
-          <div class="label">勝利條件</div>
-          <select id="targetSel"></select>
-          <div class="label" id="timeLabel">時間</div>
-          <select id="timeSel">
-            <option value="120">2 分</option><option value="180">3 分</option><option value="300">5 分</option>
-            <option value="480">8 分</option><option value="600">10 分</option><option value="900">15 分</option>
-          </select>
-        </div>
-        <div class="row">
-          <div class="label">地圖</div>
-          <select id="mapSel"></select>
+        <div class="row" id="hostRow">
+          <div class="label">房主</div>
+          <button class="small" id="lobbyBtn">↩ 回等待室（換模式 / 地圖 / 人數）</button>
           <button id="restartBtn" class="small warn">重新開始</button>
         </div>
-        <div class="row">
+        <div class="row" id="botRow">
           <div class="label" id="botLabel">電腦玩家</div>
-          <button class="small" data-bot="easy">＋ 簡單</button>
-          <button class="small" data-bot="normal">＋ 普通</button>
-          <button class="small" data-bot="hard">＋ 困難</button>
+          <button class="small" id="addBot">＋ 加一台</button>
           <button class="small warn" id="rmBot">－ 移除</button>
+          <span class="hint" id="botHint"></span>
+        </div>
+        <div class="row cls-menu-row">
+          <div class="label">坦克種類</div>
+          <div class="cls-row" id="menuCls"></div>
+          <div class="cls-note" id="menuClsNote"></div>
+        </div>
+        <div class="row invite" id="inviteRow">
+          <div class="label">邀請朋友</div>
+          <div id="inviteLinks"></div>
         </div>
         <div class="row">
           <div class="label">畫面</div>
@@ -101,6 +129,7 @@
             <button data-v="follow">跟著我</button>
             <button data-v="fit">看全圖</button>
           </div>
+          <button class="small" id="miniBtn">小地圖：開</button>
           <button class="small" id="gfxBtn">畫質：高</button>
           <button class="small touch-inline" id="vibBtn">震動：開</button>
         </div>
@@ -113,15 +142,18 @@
           <div>👈 左半邊：移動搖桿</div>
           <div>👉 右半邊：拖曳瞄準、放開開砲</div>
           <div>👆 右邊輕點：自動瞄準最近的敵人</div>
-          <div>💣 地雷　⚡ 衝刺　🏆 計分　💬 嗆聲</div>
+          <div>💣 地雷　⚡ 衝刺　📡 空襲　🏆 計分　💬 嗆聲</div>
+          <div>🎇 自走砲：搖桿拉越遠打越遠</div>
         </div>
         <div class="controls-help desk-help">
           <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移動</div>
           <div><kbd>滑鼠</kbd> 瞄準　<kbd>左鍵</kbd> 開砲（按住連發）</div>
           <div><kbd>右鍵</kbd> / <kbd>E</kbd> 埋地雷</div>
           <div><kbd>Space</kbd> / <kbd>Shift</kbd> 衝刺</div>
+          <div><kbd>Q</kbd> 呼叫空襲（搶到空投才有）</div>
           <div><kbd>Tab</kbd> 計分板　<kbd>1</kbd>~<kbd>5</kbd> 嗆聲</div>
           <div><kbd>M</kbd> 音效　<kbd>N</kbd> 音樂　<kbd>C</kbd> 切換鏡頭</div>
+          <div>🎇 自走砲：滑鼠指哪裡就打哪裡</div>
         </div>
         <button id="leaveBtn" class="small warn">離開房間</button>
       </div>
@@ -133,7 +165,7 @@
     <div class="lobby-card">
       <div class="logo">
         <div class="logo-cn">坦克大亂鬥</div>
-        <div class="logo-en">TANK BRAWL <span class="ver">2.0</span></div>
+        <div class="logo-en">TANK BRAWL <span class="ver">2.1</span></div>
       </div>
       <button id="profileBar" type="button" title="看我的生涯數據和成就">
         <span class="pf-lv" id="pfLv">Lv 1</span>
@@ -145,26 +177,34 @@
         <div class="col-me">
           <label>你的名字</label>
           <input id="nameInput" maxlength="12" placeholder="輸入暱稱" autocomplete="off">
+          <label>坦克種類 <span class="hint">（進遊戲之後也可以換）</span></label>
+          <div id="clsPick"></div>
+          <div id="clsInfo"></div>
           <label>坦克顏色</label>
           <div id="colorPick"></div>
           <label>坦克外觀 <span class="hint">（升級解鎖更多）</span></label>
           <div id="skinPick"></div>
         </div>
         <div class="col-play">
+          <div class="play-box invite-box hidden" id="inviteBox">
+            <div class="play-title" id="inviteTitle">📨 朋友邀請你加入房間</div>
+            <button id="inviteJoinBtn" class="big-go">加入戰鬥！</button>
+          </div>
           <div class="play-box">
             <div class="play-title">👥 跟朋友連線</div>
-            <label>房間代碼 <span class="hint">（同一個代碼就會進同一場）</span></label>
+            <button id="createBtn" class="big-go">開房間</button>
+            <div class="net-hint">先選模式和要等幾個人，再把連結傳給朋友</div>
+            <label>或是加入朋友的房間</label>
             <div class="room-row">
-              <input id="roomInput" maxlength="12" placeholder="TANK" autocomplete="off" autocapitalize="characters">
-              <button id="newRoomBtn" type="button" title="換一個新房間">🎲 新房間</button>
+              <input id="roomInput" maxlength="12" placeholder="房間代碼" autocomplete="off" autocapitalize="characters">
+              <button id="joinBtn" type="button">加入</button>
             </div>
-            <button id="joinBtn">開戰！</button>
             <div id="netHint" class="net-hint"></div>
           </div>
           <div class="play-box solo-box">
             <div class="play-title">🎯 自己玩（不用網路）</div>
             <div class="solo-row">
-              <button id="soloBtn" class="solo" type="button"><b>🤖 單人練習</b><span>跟 3 台電腦混戰</span></button>
+              <button id="soloBtn" class="solo" type="button"><b>🤖 單人練習</b><span>自己選模式打電腦</span></button>
               <button id="wavesBtn" class="solo" type="button"><b>🧟 生存闖關</b><span>擋住一波波敵軍和 BOSS</span></button>
             </div>
           </div>
@@ -175,13 +215,20 @@
         <div class="tip-title touch-only">📱 手機操作</div>
         <ul class="touch-only">
           <li>左手拇指：<b>移動</b>；右手拇指：<b>拖曳瞄準、放開開砲</b>，輕點會自動瞄準。</li>
-          <li>右下角 💣 埋地雷、⚡ 衝刺。手機請<b>橫著拿</b>。</li>
+          <li>右下角 💣 埋地雷、⚡ 衝刺，搶到空投會多一顆 📡 空襲。手機請<b>橫著拿</b>。</li>
         </ul>
-        <div class="tip-title">🆕 2.0 新東西</div>
+        <div class="tip-title">🆕 2.1 新東西</div>
         <ul>
-          <li>新模式：<b>搶旗大戰、山丘之王、縮圈大逃殺、生存闖關</b>（按 ⚙ 切換）。</li>
-          <li>新武器：<b>追蹤飛彈、霰彈砲、火焰噴射、隱形迷彩、超級反彈</b>。</li>
-          <li>新地形：<b>冰面</b>會滑、<b>傳送門</b>連到對面（砲彈也會被傳送）、<b>加速帶</b>會把你彈出去。</li>
+          <li><b>5 種坦克</b>：中坦、重坦、輕坦、自走砲（砲彈拋過牆）、驅逐戰車。</li>
+          <li><b>空投補給</b>：飛機會丟空投箱，搶到就能按 <b>Q</b>（手機 📡）呼叫<b>空襲</b>轟炸敵人。</li>
+          <li>地圖上會固定冒出<b>補給包</b>：回血、補滿砲彈。</li>
+          <li>開房間先選模式和人數，<b>人到齊自動開打</b>。</li>
+        </ul>
+        <div class="tip-title">⭐ 2.0 的東西</div>
+        <ul>
+          <li>模式：<b>搶旗大戰、山丘之王、縮圈大逃殺、生存闖關</b>。</li>
+          <li>武器：<b>追蹤飛彈、霰彈砲、火焰噴射、隱形迷彩、超級反彈、雷射砲</b>。</li>
+          <li>地形：<b>冰面</b>會滑、<b>傳送門</b>連到對面（砲彈也會被傳送）、<b>加速帶</b>會把你彈出去。</li>
           <li>打仗會拿經驗值升級，解鎖新的坦克外觀和成就。</li>
         </ul>
         <div class="tip-title">🔥 戰鬥技巧</div>
@@ -200,6 +247,18 @@
     <div class="panel">
       <div class="panel-head"><h2>📊 我的生涯</h2><button class="close" id="careerClose">✕</button></div>
       <div id="careerBody"></div>
+    </div>
+  </div>
+
+  <!-- 開房 / 自己玩：先選模式、人數、電腦 -->
+  <div id="setup" class="hidden">
+    <div class="panel su-panel">
+      <div class="panel-head"><h2 id="setupTitle">👥 開房間</h2><button class="close" id="setupClose">✕</button></div>
+      <div id="suBody"></div>
+      <div class="su-foot">
+        <div class="su-summary" id="suSummary"></div>
+        <button class="big-go" id="suGo">建立房間</button>
+      </div>
     </div>
   </div>
 

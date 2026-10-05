@@ -91,6 +91,16 @@ else pass(`雷射傷害 ${C.RAIL_DMG}、火焰射程 ${C.FLAME_RANGE}、火焰�
   const C1 = (() => { const got = []; return { got, cl: createClient({ readyState: 1, bufferedAmount: 0, send: (s) => got.push(JSON.parse(s)) }, () => room, null, () => false) }; })();
   C1.cl.message({ t: 'join', name: 'x', room: 'NOPE', join: true });
   if (!C1.got.some((m) => m.t === 'noroom')) errs.push('加入不存在的房間應該回 noroom');
+  // 開新房間但代碼已經有房主了 → 回 taken（換個代碼再開，不能跑進別人的房間）；同一條連線換代碼可以再開
+  const rooms = new Map([['NET', room]]);
+  const getR = (c) => { if (!rooms.has(c)) rooms.set(c, new Room(c)); return rooms.get(c); };
+  const D1 = (() => { const got = []; return { got, cl: createClient({ readyState: 1, bufferedAmount: 0, send: (s) => got.push(JSON.parse(s)) }, getR, null, (c) => rooms.has(c)) }; })();
+  const before = room.players.size;
+  D1.cl.message({ t: 'join', name: '撞號', room: 'NET', create: { mode: 'ffa', players: 2 } });
+  if (!D1.got.some((m) => m.t === 'taken') || room.players.size !== before) errs.push('開房撞到別人的代碼應該回 taken');
+  D1.cl.message({ t: 'join', name: '撞號', room: 'NEW1', create: { mode: 'koth', players: 3 } });
+  const wD = D1.got.find((m) => m.t === 'welcome');
+  if (!wD || !wD.host || wD.room !== 'NEW1' || rooms.get('NEW1').settings.mode !== 'koth') errs.push('換代碼之後應該開成新房間');
   // 自己玩（人數 1）：直接開打
   const solo = new Room('SOLO');
   createClient({ readyState: 1, bufferedAmount: 0, send() {} }, () => solo).message({ t: 'join', name: 'me', room: 'SOLO', create: { mode: 'waves', players: 1, bots: 1 } });
