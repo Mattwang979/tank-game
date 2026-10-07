@@ -167,6 +167,63 @@ else pass(`雷射傷害 ${C.RAIL_DMG}、火焰射程 ${C.FLAME_RANGE}、火焰�
   else pass(`空襲 ${booms} 顆炸彈，炸到 ${hurt}/3 個敵人，呼叫的人毫髮無傷`);
 }
 
+// ---- 2.2 數值調整
+{
+  const L = CLASSES.light, H = CLASSES.heavy, A = CLASSES.spg, D = CLASSES.td;
+  const sp = (c) => Math.round(C.TANK_SPEED * c.spd);
+  const errs = [];
+  if (sp(L) !== 190 || !(L.dcd > 1.3) || L.ammo !== 6 || !(L.dmg > 25)) errs.push('輕坦（速度 190、衝刺冷卻變長、彈藥 6、傷害提高）');
+  if (H.hp !== 250 || sp(H) !== 150 || !(H.dmg > 46)) errs.push('重坦（血量 250、速度 150、傷害提高）');
+  if (!(A.dmg > 58) || !(C.ARTY_SPD > 650) || A.ammo !== 3) errs.push('自走砲（傷害提高、砲彈變快、彈藥 3）');
+  if (D.hp !== 100) errs.push('驅逐戰車血量 100');
+  if (C.MINE_DMG !== Math.floor(85 / 2)) errs.push(`地雷傷害應該砍半（現在 ${C.MINE_DMG}）`);
+  const room = new Room('V22');
+  room.settings.map = 0; room.startMatch();
+  const p = room.addPlayer({ name: 'p', color: '#ff4d4d' });
+  room.applyPowerup(p, 'rail');
+  if (p.specialN !== 4) errs.push(`雷射砲應該 4 發（現在 ${p.specialN}）`);
+  if (MAPS.some((m) => m.name === '冰封湖面')) errs.push('冰封湖面應該刪掉');
+  if (errs.length) fail('2.2 數值：' + errs.join('；'));
+  else pass(`2.2 數值：輕坦 ${sp(L)} 速／${L.ammo} 發／${L.dmg} 傷害、重坦 ${H.hp} 血／${sp(H)} 速／${H.dmg} 傷害、自走砲 ${A.dmg} 傷害／${A.ammo} 發、驅逐 ${D.hp} 血、地雷 ${C.MINE_DMG}、雷射 ${p.specialN} 發`);
+}
+
+// ---- 岩漿：站在上面會一直燒、會變慢；被打過之後掉進岩漿算逼死
+{
+  const mi = MAPS.findIndex((m) => m.name === '熔岩火山');
+  const room = new Room('LAVA');
+  room.settings.map = mi; room.startMatch();
+  const m = room.map;
+  const li = m.tiles.findIndex((t) => t === Core.T.LAVA);
+  const lx = (li % m.w) * TILE + 20, ly = Math.floor(li / m.w) * TILE + 20;
+  const a = room.addPlayer({ name: 'a', color: '#ff4d4d' });
+  const b = room.addPlayer({ name: 'b', color: '#4da6ff' });
+  const kills = [];
+  const ev = room.event.bind(room);
+  room.event = (e) => { if (e.e === 'kill') kills.push(e); ev(e); };
+  const hold = (p) => Object.assign(p, { x: lx, y: ly, vx: 0, vy: 0 });
+  Object.assign(a, { protectT: 0, shield: 0, hp: a.maxHp });
+  hold(a);
+  for (let i = 0; i < 60; i++) { hold(a); room.tick(); }
+  const burned = a.maxHp - a.hp;
+  // 慢速：在岩漿上全速前進一秒，走得比在地上短
+  const t1 = { x: lx, y: ly, vx: 0, vy: 0, ha: 0, dashT: 0, dashCd: 9, slideT: 0, portLock: 0, spd: 1, r: 15 };
+  const onLava = Core.tileAt(m, Math.floor(lx / TILE), Math.floor(ly / TILE)) === Core.T.LAVA;
+  Core.stepTank(t1, K.RIGHT, C.DT, m);
+  const v1 = Math.hypot(t1.vx, t1.vy);
+  // 被 b 打一下之後掉進岩漿燒死：擊殺算 b 的
+  Object.assign(a, { hp: 30 });
+  room.damage(a, 5, b.id, 'shell', {});
+  for (let i = 0; i < 120 && a.alive; i++) { hold(a); room.tick(); }
+  const k = kills.find((e) => e.v === a.id);
+  const errs = [];
+  if (!onLava) errs.push('找不到岩漿格');
+  if (!(burned >= 35 && burned <= 45)) errs.push(`站在岩漿上 1 秒應該燒掉約 ${C.LAVA_DPS} 血（實際 ${burned.toFixed(0)}）`);
+  if (!(v1 > 0 && v1 < C.TANK_SPEED * C.ACCEL * C.DT * 0.8)) errs.push('岩漿上應該比較慢');
+  if (!k || k.w !== 'lava' || k.k !== b.id || !k.f) errs.push('被打過之後掉進岩漿應該算對方逼死');
+  if (errs.length) fail('岩漿：' + errs.join('；'));
+  else pass(`岩漿：1 秒燒掉 ${burned.toFixed(0)} 血、會變慢，被打過再燒死算逼死`);
+}
+
 // ---- 每張地圖 × 每種模式
 const SECONDS = 150;
 const total = { drop: 0, crate: 0, supply: 0, air: 0, arty: 0 };
@@ -180,11 +237,12 @@ for (let mi = 0; mi < MAPS.length; mi++) {
     ['easy', 'normal', 'hard', 'normal', 'hard', 'easy'].forEach((l) => room.addBot(l));
     room.assignTeams(true);
     room.startMatch();
-    const stats = { shot: 0, kill: 0, mine: 0, pu: 0, boom: 0, bnc: 0, rail: 0, dash: 0, self: 0, clash: 0, port: 0, pad: 0, brWin: 0, waveClear: 0, special: 0, drop: 0, crate: 0, supply: 0, aircall: 0, arty: 0 };
+    const stats = { shot: 0, kill: 0, mine: 0, pu: 0, boom: 0, bnc: 0, rail: 0, dash: 0, self: 0, clash: 0, port: 0, pad: 0, brWin: 0, waveClear: 0, special: 0, drop: 0, crate: 0, supply: 0, aircall: 0, arty: 0, lava: 0 };
     const ev = room.event.bind(room);
     room.event = (e) => {
       if (e.e in stats) stats[e.e]++;
       if (e.e === 'kill' && e.self) stats.self++;
+      if (e.e === 'kill' && e.w === 'lava') stats.lava++;
       if (e.e === 'flag') stats['f_' + e.a] = (stats['f_' + e.a] || 0) + 1;
       if (e.e === 'round' && e.w) stats.brWin++;
       if (e.e === 'wave' && e.a === 'clear') stats.waveClear++;
@@ -222,6 +280,8 @@ for (let mi = 0; mi < MAPS.length; mi++) {
     if (mode === 'koth') { checks.push(maxHill > 5); extra = `最高佔山 ${maxHill.toFixed(0)} 秒`; }
     if (mode === 'br') { checks.push(stats.brWin >= 2); extra = `打完 ${room.obj.round} 回合（${stats.brWin} 回合有贏家）`; }
     if (mode === 'waves') { checks.push(room.obj.wave >= 2); extra = `打到第 ${room.obj.wave} 波${room.state !== 'playing' ? '（生命用完）' : ''}`; }
+    // 電腦不能一直掉進岩漿（會繞路）
+    if (stats.lava) { checks.push(stats.lava <= Math.max(3, stats.kill * 0.15)); extra += ` 岩漿死亡 ${stats.lava}`; }
     const ok = checks.every(Boolean);
     if (!ok) failed = true;
     total.drop += stats.drop; total.crate += stats.crate; total.supply += stats.supply; total.air += stats.aircall; total.arty += stats.arty;

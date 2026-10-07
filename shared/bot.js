@@ -1,6 +1,7 @@
 /*
  * 電腦玩家：BFS 尋路（會走傳送門）、走位繞圈、預判射擊、閃避砲彈、埋地雷；困難難度會算反彈射擊。
  * 會用特殊武器，也會玩搶旗、佔山頭、躲毒圈；會開各種坦克（自走砲會拋射越過牆）、搶空投、呼叫空襲、躲落點紅圈。
+ * 會繞開岩漿（真的沒路才會走過去），不小心踩到會趕快開出來。
  * 輸出和真人一樣的輸入（按鍵 + 瞄準角度），不作弊移動。
  */
 (function (root, factory) {
@@ -21,7 +22,10 @@
 
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
-  function bfs(map, sx, sy, gx, gy, allowBrick) {
+  // 岩漿：開得進去但會燒，尋路時當成走不過去（allowLava 才走），走位時也盡量避開
+  const isLava = (map, x, y) => Core.tileAt(map, Math.floor(x / TILE), Math.floor(y / TILE)) === T.LAVA;
+
+  function bfs(map, sx, sy, gx, gy, allowBrick, allowLava) {
     const w = map.w, h = map.h;
     const prev = new Int32Array(w * h).fill(-1);
     const start = sy * w + sx, goal = gy * w + gx;
@@ -41,6 +45,7 @@
         if (prev[j] !== -1) continue;
         const t = map.tiles[j];
         if (j !== goal && Core.blocksTank(t) && !(allowBrick && t === T.BRICK)) continue;
+        if (j !== goal && t === T.LAVA && !allowLava) continue;
         prev[j] = i;
         q.push(j);
       }
@@ -60,7 +65,7 @@
     }
 
     reset() {
-      this.path = null; this.pathT = 0; this.goalKey = '';
+      this.path = null; this.pathT = 0; this.goalKey = ''; this.lavaPath = false;
       this.target = null; this.seenT = 0;
       this.strafe = Math.random() < 0.5 ? 1 : -1; this.strafeT = 0;
       this.lastX = 0; this.lastY = 0; this.checkT = 1; this.wanderT = 0; this.wanderA = 0;
@@ -89,7 +94,8 @@
           for (let i = 0; i < 12; i++) {
             const a = Math.random() * Math.PI * 2, d = Math.random() * r;
             const sx = x + Math.cos(a) * d, sy = y + Math.sin(a) * d;
-            if (!Core.blocksTank(Core.tileAt(room.map, Math.floor(sx / TILE), Math.floor(sy / TILE)))) { this.spot = { x: sx, y: sy }; break; }
+            const tt = Core.tileAt(room.map, Math.floor(sx / TILE), Math.floor(sy / TILE));
+            if (!Core.blocksTank(tt) && tt !== T.LAVA) { this.spot = { x: sx, y: sy }; break; }
           }
           if (!this.spot) this.spot = { x, y };
         }
@@ -269,6 +275,25 @@
       }
       if (this.wanderT > 0) { this.wanderT -= dt; mx = Math.cos(this.wanderA); my = Math.sin(this.wanderA); }
 
+      // 岩漿：已經踩在上面就往最近的安全地面開（衝刺得出去就衝）；不然前面是岩漿就轉個方向（尋路本來就決定要過岩漿的不管）
+      if (isLava(map, p.x, p.y)) {
+        const out = this.lavaExit(map, p);
+        if (out) { mx = out.x; my = out.y; if (p.dashCd <= 0) k |= K.DASH; }
+      } else if (!this.lavaPath && (mx || my)) {
+        const ml0 = Math.hypot(mx, my);
+        const fx = mx / ml0, fy = my / ml0, look = p.r + 16;
+        if (isLava(map, p.x + fx * look, p.y + fy * look)) {
+          let found = false;
+          for (const turn of [0.6, -0.6, 1.2, -1.2, 1.9, -1.9, Math.PI]) {
+            const a = Math.atan2(fy, fx) + turn * (turn === Math.PI ? 1 : this.strafe);
+            const nx = Math.cos(a), ny = Math.sin(a);
+            const tt = Core.tileAt(map, Math.floor((p.x + nx * look) / TILE), Math.floor((p.y + ny * look) / TILE));
+            if (tt !== T.LAVA && !Core.blocksTank(tt)) { mx = nx; my = ny; found = true; break; }
+          }
+          if (!found) { mx = 0; my = 0; }
+        }
+      }
+
       const ml = Math.hypot(mx, my);
       if (ml > 0.01) {
         const ca = mx / ml, sa = my / ml;
@@ -342,6 +367,24 @@
       return { s: ++this.seq, k, a: this.aim, d: arty || this.brick ? Math.round(this.aimDist) : 0 };
     }
 
+    // 站在岩漿上：找最近的安全地面（8 個方向、由近到遠）
+    lavaExit(map, p) {
+      for (const dist of [40, 80, 120]) {
+        let best = null, bd = Infinity;
+        for (let i = 0; i < 8; i++) {
+          const a = (i * Math.PI) / 4;
+          const x = p.x + Math.cos(a) * dist, y = p.y + Math.sin(a) * dist;
+          const tt = Core.tileAt(map, Math.floor(x / TILE), Math.floor(y / TILE));
+          if (tt === T.LAVA || Core.blocksTank(tt)) continue;
+          // 跟原本要去的方向差不多的優先
+          const d = this.path && this.path.length ? Math.hypot(x - (this.path[0].x * TILE + 20), y - (this.path[0].y * TILE + 20)) : 0;
+          if (d < bd) { bd = d; best = { x: Math.cos(a), y: Math.sin(a) }; }
+        }
+        if (best) return best;
+      }
+      return null;
+    }
+
     nextWaypoint(map, p, goal, dt) {
       if (!goal) return null;
       const sx = Math.floor(p.x / TILE), sy = Math.floor(p.y / TILE);
@@ -351,7 +394,10 @@
       if (!this.path || this.pathT <= 0 || key !== this.goalKey) {
         this.pathT = 0.5;
         this.goalKey = key;
-        this.path = bfs(map, sx, sy, gx, gy, false) || bfs(map, sx, sy, gx, gy, true);
+        this.path = bfs(map, sx, sy, gx, gy, false, false) || bfs(map, sx, sy, gx, gy, true, false);
+        this.lavaPath = false;
+        // 真的只能過岩漿（例如被圍住了）才走岩漿
+        if (!this.path) { this.path = bfs(map, sx, sy, gx, gy, true, true); this.lavaPath = !!this.path; }
       }
       const path = this.path;
       if (!path) return goal;
