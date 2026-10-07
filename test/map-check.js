@@ -1,5 +1,6 @@
 'use strict';
-// 檢查每張地圖：尺寸、邊界、出生點互通（不打破磚牆也走得到）、旗座、山頭、傳送門配對
+// 檢查每張地圖：尺寸、邊界、出生點互通（不打破磚牆也走得到）、旗座、山頭、傳送門配對；
+// 有岩漿的地圖：出生點、道具點、補給點、旗座、山頭都要不踩岩漿就走得到
 const { MAPS, parseMap } = require('../shared/maps');
 const Core = require('../shared/core');
 const { T, TILE } = Core;
@@ -46,6 +47,26 @@ for (const def of MAPS) {
   for (const s of [...m.spawns, ...m.powerSpots]) {
     if (!seen[cell(s)]) errs.push(`(${Math.floor(s.x / TILE)},${Math.floor(s.y / TILE)}) 走不到`);
   }
+  // 不踩岩漿也走得到（岩漿是可以冒險穿過去的捷徑，不能是唯一的路）
+  let lava = 0;
+  for (let i = 0; i < m.tiles.length; i++) if (m.tiles[i] === T.LAVA) lava++;
+  if (lava) {
+    const safe = new Uint8Array(m.w * m.h);
+    const q2 = [cell(s0)];
+    safe[q2[0]] = 1;
+    while (q2.length) {
+      let i = q2.pop();
+      let x = i % m.w, y = (i / m.w) | 0;
+      if (m.tiles[i] === T.PORTAL) { [x, y] = Core.portalPartner(m, x, y); i = y * m.w + x; safe[i] = 1; }
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const j = (y + dy) * m.w + x + dx;
+        if (!safe[j] && !Core.blocksTank(m.tiles[j]) && m.tiles[j] !== T.LAVA) { safe[j] = 1; q2.push(j); }
+      }
+    }
+    for (const s of [...m.spawns, ...m.powerSpots, ...m.flags, ...m.hills, ...m.supplySpots]) {
+      if (!safe[cell(s)]) errs.push(`(${Math.floor(s.x / TILE)},${Math.floor(s.y / TILE)}) 要踩岩漿才走得到`);
+    }
+  }
   m.flags.forEach((f, t) => {
     const i = cell(f);
     if (m.tiles[i] !== T.FLOOR || !seen[i]) errs.push(`${t ? '藍' : '紅'}旗座不在走得到的空地上`);
@@ -73,7 +94,7 @@ for (const def of MAPS) {
   let unreachableFloor = 0;
   for (let i = 0; i < m.tiles.length; i++) if (!Core.blocksTank(m.tiles[i]) && !seen[i]) unreachableFloor++;
   if (unreachableFloor) errs.push(`有 ${unreachableFloor} 格空地走不到`);
-  console.log(`${errs.length ? '✗' : '✓'} ${def.name}（${m.theme}）: 出生點 ${m.spawns.length}，道具點 ${m.powerSpots.length}，補給包點 ${m.supplySpots.length}，山頭 ${m.hills.length}，傳送門 ${portals} ${errs.join('; ')}`);
+  console.log(`${errs.length ? '✗' : '✓'} ${def.name}（${m.theme}）: 出生點 ${m.spawns.length}，道具點 ${m.powerSpots.length}，補給包點 ${m.supplySpots.length}，山頭 ${m.hills.length}，傳送門 ${portals}${lava ? `，岩漿 ${lava} 格` : ''} ${errs.join('; ')}`);
   if (errs.length) ok = false;
   if (process.argv.includes('-v')) {
     // 補給包點用 + 標出來

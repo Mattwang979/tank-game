@@ -62,7 +62,7 @@
     <div id="tabhint"><kbd>Tab</kbd> 計分板　<kbd>Esc</kbd> 選單 / 換坦克　<kbd>Q</kbd> 空襲　<kbd>1</kbd>~<kbd>5</kbd> 嗆聲</div>
 
     <div id="scoreboard" class="hidden"></div>
-    <div id="results" class="hidden"></div>
+    <div id="results" class="hidden"><div id="resBody"></div><div class="res-next" id="resNext"></div></div>
 
     <!-- 等待室：開房之後等朋友進來，人到齊自動開始 -->
     <div id="waitroom" class="hidden">
@@ -165,7 +165,7 @@
     <div class="lobby-card">
       <div class="logo">
         <div class="logo-cn">坦克大亂鬥</div>
-        <div class="logo-en">TANK BRAWL <span class="ver">2.1</span></div>
+        <div class="logo-en">TANK BRAWL <span class="ver">2.2</span></div>
       </div>
       <button id="profileBar" type="button" title="看我的生涯數據和成就">
         <span class="pf-lv" id="pfLv">Lv 1</span>
@@ -217,7 +217,14 @@
           <li>左手拇指：<b>移動</b>；右手拇指：<b>拖曳瞄準、放開開砲</b>，輕點會自動瞄準。</li>
           <li>右下角 💣 埋地雷、⚡ 衝刺，搶到空投會多一顆 📡 空襲。手機請<b>橫著拿</b>。</li>
         </ul>
-        <div class="tip-title">🆕 2.1 新東西</div>
+        <div class="tip-title">🆕 2.2 更新</div>
+        <ul>
+          <li>新地圖<b>熔岩火山</b>：岩漿開得進去，但會一直燒血、速度變慢，衝刺跳過去比較不痛（冰封湖面下架）。</li>
+          <li><b>重坦</b>血量 250、速度變快、砲彈更痛；<b>輕坦</b>變慢一點，但彈藥 6 發、傷害提高。</li>
+          <li><b>自走砲</b>傷害提高、砲彈飛更快、彈藥 3 發；<b>驅逐戰車</b>血量 100。</li>
+          <li><b>雷射砲</b>變成 4 發；<b>地雷</b>傷害砍半。</li>
+        </ul>
+        <div class="tip-title">⭐ 2.1 的東西</div>
         <ul>
           <li><b>5 種坦克</b>：中坦、重坦、輕坦、自走砲（砲彈拋過牆）、驅逐戰車。</li>
           <li><b>空投補給</b>：飛機會丟空投箱，搶到就能按 <b>Q</b>（手機 📡）呼叫<b>空襲</b>轟炸敵人。</li>
@@ -228,7 +235,7 @@
         <ul>
           <li>模式：<b>搶旗大戰、山丘之王、縮圈大逃殺、生存闖關</b>。</li>
           <li>武器：<b>追蹤飛彈、霰彈砲、火焰噴射、隱形迷彩、超級反彈、雷射砲</b>。</li>
-          <li>地形：<b>冰面</b>會滑、<b>傳送門</b>連到對面（砲彈也會被傳送）、<b>加速帶</b>會把你彈出去。</li>
+          <li>地形：<b>傳送門</b>連到對面（砲彈也會被傳送）、<b>加速帶</b>會把你彈出去。</li>
           <li>打仗會拿經驗值升級，解鎖新的坦克外觀和成就。</li>
         </ul>
         <div class="tip-title">🔥 戰鬥技巧</div>

@@ -31,11 +31,11 @@
 
   const PU_WEIGHTS = { heal: 3, shield: 2, rapid: 1.5, triple: 1.5, rail: 1.1, mines: 1.2, speed: 1.4, homing: 1.2, shotgun: 1.3, flame: 1.1, cloak: 1, bounce: 1.3 };
   const PU_TEXT = {
-    heal: '修復 +50', shield: '能量護盾', rapid: '狂暴連射', triple: '三連發', rail: '雷射砲 x3', mines: '地雷 +3', speed: '加速引擎',
+    heal: '修復 +50', shield: '能量護盾', rapid: '狂暴連射', triple: '三連發', rail: '雷射砲 x4', mines: '地雷 +3', speed: '加速引擎',
     homing: '追蹤飛彈 x3', shotgun: '霰彈砲 x4', flame: '火焰噴射', cloak: '隱形迷彩', bounce: '超級反彈',
     supply: '補給包', crate: '空投補給',
   };
-  const SPECIAL = { rail: 3, homing: 3, shotgun: 4, flame: C.FLAME_FUEL };
+  const SPECIAL = { rail: 4, homing: 3, shotgun: 4, flame: C.FLAME_FUEL };
   const BOT_CLASS_W = { medium: 3, heavy: 2, light: 2, td: 1.5, spg: 1.5 };
   const HOST_ONLY = { mode: 1, target: 1, time: 1, map: 1, restart: 1, addbot: 1, rmbot: 1, start: 1, lobby: 1, players: 1, bots: 1, level: 1 };
   const MAX_PLAYERS = 8;
@@ -433,7 +433,7 @@
         dashT: 0, dashCd: 0, slideT: 0, portLock: -1, ammo: p.maxAmmo, ammoT: 0, fireCd: 0.3,
         mineAmmo: Math.max(p.mineAmmo || 0, C.MINE_BASE), mineT: 0, mineCd: 0.3,
         special: null, specialN: 0, flameAcc: 0, flaming: false, airCd: 0,
-        rapidT: 0, tripleT: 0, boostT: 0, boost: false, cloakT: 0, bounceT: 0, zoneAcc: 0,
+        rapidT: 0, tripleT: 0, boostT: 0, boost: false, cloakT: 0, bounceT: 0, zoneAcc: 0, lavaAcc: 0,
         protectT: p.enemy ? 1.2 : C.PROTECT, revealT: 0, inBush: false, held: 0, lastHitBy: null, lastHitT: -99,
         justDashed: false, justPorted: null, justPadded: false, carry: -1,
       });
@@ -583,7 +583,14 @@
       if ((p.held & K.CALL) && p.air > 0 && !(p.airCd > 0)) this.callAirstrike(p);
       if (!p.alive) return;
 
-      p.inBush = Core.tileAt(this.map, Math.floor(p.x / TILE), Math.floor(p.y / TILE)) === T.BUSH;
+      const ground = Core.tileAt(this.map, Math.floor(p.x / TILE), Math.floor(p.y / TILE));
+      p.inBush = ground === T.BUSH;
+      // 岩漿：站在上面每 0.25 秒燒一次（衝刺快速跳過去可以少燒幾下）
+      if (ground === T.LAVA) {
+        p.lavaAcc += dt;
+        while (p.lavaAcc >= C.LAVA_TICK - 1e-9 && p.alive) { p.lavaAcc -= C.LAVA_TICK; this.damage(p, C.LAVA_DPS * C.LAVA_TICK, null, 'lava'); }
+        if (!p.alive) return;
+      } else p.lavaAcc = 0;
 
       for (let i = this.powerups.length - 1; i >= 0; i--) {
         const u = this.powerups[i];
@@ -1156,7 +1163,7 @@
       const total = dmg + absorbed;
       if (att && att !== victim) { att.st.dmg += total; victim.lastHitBy = att.id; victim.lastHitT = this.time; }
       const ev = { e: 'hit', id: victim.id, by: attackerId, d: Math.round(total), s: absorbed > 0 ? 1 : 0, x: r1(victim.x), y: r1(victim.y) };
-      if (weapon === 'flame' || weapon === 'zone') ev.f = 1;
+      if (weapon === 'flame' || weapon === 'zone' || weapon === 'lava') ev.f = 1;
       this.event(ev);
       if (victim.hp <= 0.5) this.kill(victim, att, weapon, extra || {});
     }
@@ -1227,6 +1234,9 @@
       } else if (weapon === 'zone') {
         ev.zone = 1;
         this.ann('被毒圈吞噬了 ☠️', 'OUT OF ZONE', '#c77dff', 'm', victim.id, 'kill');
+      } else if (weapon === 'lava') {
+        ev.lava = 1;
+        this.ann('掉進岩漿燒成灰了 🌋', 'BURNED', '#ff7a2e', 'm', victim.id, 'kill');
       } else {
         if (!victim.enemy) victim.kills--;
         ev.self = 1;

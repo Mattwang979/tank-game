@@ -10,8 +10,8 @@
   'use strict';
 
   const TILE = 40;
-  // ICE 冰面（會滑）、PORTAL 傳送門（和 180° 對面的傳送門相連）、PAD_* 加速帶（箭頭方向）
-  const T = { FLOOR: 0, STEEL: 1, BRICK: 2, WATER: 3, BUSH: 4, BARREL: 5, ICE: 6, PORTAL: 7, PAD_R: 8, PAD_L: 9, PAD_D: 10, PAD_U: 11 };
+  // ICE 冰面（會滑）、PORTAL 傳送門（和 180° 對面的傳送門相連）、PAD_* 加速帶（箭頭方向）、LAVA 岩漿（開得進去但會燒、會變慢）
+  const T = { FLOOR: 0, STEEL: 1, BRICK: 2, WATER: 3, BUSH: 4, BARREL: 5, ICE: 6, PORTAL: 7, PAD_R: 8, PAD_L: 9, PAD_D: 10, PAD_U: 11, LAVA: 12 };
   const PAD_DIR = { 8: [1, 0], 9: [-1, 0], 10: [0, 1], 11: [0, -1] };
 
   const C = {
@@ -65,12 +65,12 @@
     FLAME_DPS: 125,
     FLAME_FUEL: 4.5,
 
-    // 自走砲：拋射砲彈越過牆壁，飛行時間 = ARTY_T0 + 距離 / ARTY_SPD
+    // 自走砲：拋射砲彈越過牆壁，飛行時間 = ARTY_T0 + 距離 / ARTY_SPD（2.2：砲彈變快）
     ARTY_MIN: 90,
     ARTY_MAX: 600,
     ARTY_RADIUS: 72,
-    ARTY_T0: 0.5,
-    ARTY_SPD: 650,
+    ARTY_T0: 0.4,
+    ARTY_SPD: 950,
 
     // 呼叫空襲：AIR_BOMBS 顆炸彈，每顆間隔 AIR_GAP 秒開始預警，預警 AIR_WARN 秒後落地
     AIR_BOMBS: 12,
@@ -97,7 +97,7 @@
     MINE_ARM: 0.9,
     MINE_TRIGGER: 24,
     MINE_RADIUS: 95,
-    MINE_DMG: 85,
+    MINE_DMG: 42,      // 2.2：砍半（原本 85）
     MINE_MAX_ACTIVE: 4,
     MINE_REGEN: 7,
     MINE_BASE: 3,
@@ -108,6 +108,11 @@
     BARREL_DMG: 70,
     BARREL_RESPAWN: 25,
     BRICK_HP: 3,
+
+    // 岩漿：開得進去，但每 LAVA_TICK 秒燒一次（每秒 LAVA_DPS），速度變成 LAVA_SLOW 倍
+    LAVA_DPS: 40,
+    LAVA_TICK: 0.25,
+    LAVA_SLOW: 0.7,
 
     RESPAWN: 3,
     PROTECT: 2,
@@ -127,10 +132,10 @@
   // arty：自走砲（拋射）；bars：大廳顯示的能力值（耐久、速度、火力、射程，滿分 5）
   const CLASSES = {
     medium: { name: '中型坦克', short: '中坦', desc: '各方面平均，最好上手', hp: 100, r: 15, spd: 1, dcd: 2.2, ammo: 4, regen: 0.6, fcd: 0.22, dmg: 34, bspd: 520, kb: 1, see: 110, mineSee: 80, bars: [3, 3, 3, 3] },
-    heavy: { name: '重型坦克', short: '重坦', desc: '超耐打、砲彈很痛，但又慢又大台', hp: 165, r: 17.5, spd: 0.76, dcd: 3, ammo: 3, regen: 0.85, fcd: 0.34, dmg: 46, bspd: 470, kb: 0.45, see: 110, mineSee: 80, bars: [5, 1.5, 4, 3] },
-    light: { name: '輕型坦克', short: '輕坦', desc: '最快、衝刺冷卻短，看得穿草叢和地雷，但很脆', hp: 70, r: 13, spd: 1.28, dcd: 1.3, ammo: 5, regen: 0.45, fcd: 0.16, dmg: 25, bspd: 580, kb: 1.3, see: 210, mineSee: 150, bars: [1.5, 5, 2, 3] },
-    spg: { name: '自走砲', short: '自走砲', desc: '砲彈拋過牆壁、落地爆炸，敵人看得到落點；近戰很弱', hp: 80, r: 15.5, spd: 0.86, dcd: 2.6, ammo: 2, regen: 1.6, fcd: 1, dmg: 58, bspd: 0, kb: 1, see: 110, mineSee: 80, arty: true, bars: [2, 2, 4.5, 5] },
-    td: { name: '驅逐戰車', short: '驅逐', desc: '高速穿甲彈一發超痛，但彈藥少、裝填慢', hp: 95, r: 16, spd: 0.92, dcd: 2.4, ammo: 2, regen: 1.15, fcd: 0.5, dmg: 58, bspd: 900, kb: 0.8, see: 110, mineSee: 80, bars: [2.5, 2.5, 5, 4.5] },
+    heavy: { name: '重型坦克', short: '重坦', desc: '超耐打、砲彈很痛，但比較慢又大台', hp: 250, r: 17.5, spd: 150 / C.TANK_SPEED, dcd: 3, ammo: 3, regen: 0.85, fcd: 0.34, dmg: 48, bspd: 470, kb: 0.45, see: 110, mineSee: 80, bars: [5, 2.5, 4, 3] },
+    light: { name: '輕型坦克', short: '輕坦', desc: '最快，看得穿草叢和地雷，彈藥多；但很脆', hp: 70, r: 13, spd: 190 / C.TANK_SPEED, dcd: 1.8, ammo: 6, regen: 0.45, fcd: 0.16, dmg: 28, bspd: 580, kb: 1.3, see: 210, mineSee: 150, bars: [1.5, 4.5, 2.5, 3] },
+    spg: { name: '自走砲', short: '自走砲', desc: '砲彈拋過牆壁、落地爆炸，敵人看得到落點；近戰很弱', hp: 80, r: 15.5, spd: 0.86, dcd: 2.6, ammo: 3, regen: 1.6, fcd: 1, dmg: 68, bspd: 0, kb: 1, see: 110, mineSee: 80, arty: true, bars: [2, 2, 5, 5] },
+    td: { name: '驅逐戰車', short: '驅逐', desc: '高速穿甲彈一發超痛，但彈藥少、裝填慢', hp: 100, r: 16, spd: 0.92, dcd: 2.4, ammo: 2, regen: 1.15, fcd: 0.5, dmg: 58, bspd: 900, kb: 0.8, see: 110, mineSee: 80, bars: [3, 2.5, 4.5, 4.5] },
   };
   const CLASS_LIST = ['medium', 'heavy', 'light', 'spg', 'td'];
 
@@ -211,7 +216,7 @@
       t.dashT = Math.max(0, t.dashT - dt);
     } else {
       const ice = ground === T.ICE;
-      const sp = C.TANK_SPEED * (t.boost ? C.BOOST_MULT : 1) * (t.spd || 1) * (ice ? C.ICE_MAX : 1);
+      const sp = C.TANK_SPEED * (t.boost ? C.BOOST_MULT : 1) * (t.spd || 1) * (ice ? C.ICE_MAX : ground === T.LAVA ? C.LAVA_SLOW : 1);
       const acc = ice ? C.ICE_ACCEL : t.slideT > 0 ? C.SLIDE_ACCEL : C.ACCEL;
       const f = Math.min(1, acc * dt);
       t.vx += (mx * sp - t.vx) * f;

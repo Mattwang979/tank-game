@@ -6,10 +6,10 @@
   const $ = (id) => document.getElementById(id);
   const COLORS = TBGame.COLORS;
   const TAUNTS = ['來啊！打我啊！', '哈哈哈哈哈', 'GG 太簡單', '小心腳下 😏', '救命啊！！'];
-  const WEAPON = { shell: '💥', rail: '⚡', mine: '💣', barrel: '🛢️', boom: '💀', missile: '🚀', shotgun: '💢', flame: '🔥', zone: '☠️', air: '✈️', arty: '🎇' };
+  const WEAPON = { shell: '💥', rail: '⚡', mine: '💣', barrel: '🛢️', boom: '💀', missile: '🚀', shotgun: '💢', flame: '🔥', zone: '☠️', air: '✈️', arty: '🎇', lava: '🌋' };
   const BOT_LV = { easy: '簡單', normal: '普通', hard: '困難', boss: 'BOSS' };
   const SPECIAL_NAME = { rail: '雷射砲', homing: '追蹤飛彈', shotgun: '霰彈砲', flame: '火焰燃料' };
-  const SPECIAL_MAX = { rail: 3, homing: 3, shotgun: 4, flame: C.FLAME_FUEL };
+  const SPECIAL_MAX = { rail: 4, homing: 3, shotgun: 4, flame: C.FLAME_FUEL };
   const INTERP = 80;
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const store = { get: (k, d) => { try { return localStorage.getItem('tb_' + k) || d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem('tb_' + k, v); } catch {} } };
@@ -377,6 +377,7 @@
         S.players = new Map(m.players.map((p) => [p.id, p]));
         if (m.state === 'playing' && prev && prev !== 'playing') { Profile.newSession(); S.myStreak = 0; }
         if (prev === 'waiting' && m.state === 'playing') { Sfx.play('countdown', true); buzz(60); }
+        if (m.state === 'intermission' && prev !== 'intermission') { S.resShown = false; S.resKey = null; }
         refreshScoreUI(); refreshMenu(); refreshWaitRoom();
         break;
       }
@@ -513,7 +514,7 @@
         if (e.v === me) {
           Sfx.play('death');
           buzz([60, 40, 120]);
-          S.deadBy = e.self ? '你把自己炸飛了 🤡' : e.zone ? '你被毒圈吞噬了 ☠️' : `被 <b style="color:${colorOf(e.k)}">${esc(nameOf(e.k))}</b> ${WEAPON[e.w] || ''} 擊毀`;
+          S.deadBy = e.self ? '你把自己炸飛了 🤡' : e.zone ? '你被毒圈吞噬了 ☠️' : e.lava ? '你掉進岩漿燒成灰了 🌋' : `被 <b style="color:${colorOf(e.k)}">${esc(nameOf(e.k))}</b> ${WEAPON[e.w] || ''} 擊毀`;
           S.myStreak = 0;
           Profile.death();
         }
@@ -766,6 +767,7 @@
     const team = M().team;
     const mt = myTeam();
     const st = { tanks: [], bullets: [], mines: [], powerups: [], bubbles: [], aim: null, dim: S.info && S.info.state !== 'playing', lowHp: S.you && S.you.alive && S.you.hp < S.you.maxHp * 0.3 };
+    if (S.pred && S.you && S.you.alive) st.onLava = Core.tileAt(S.map, Math.floor(S.pred.x / Core.TILE), Math.floor(S.pred.y / Core.TILE)) === Core.T.LAVA;
     const serverNow = performance.now() + (S.clock || 0);
     const rt = serverNow - INTERP;
     // 扛旗的人：坦克 id → 被扛的旗子是哪一隊的
@@ -1120,7 +1122,15 @@
       return `<tr class="${p.id === S.myId ? 'me' : ''}"><td><span class="dot" style="background:${md.tc ? TEAM_COLORS[p.team] : p.color}"></span>${esc(p.name)}${p.bot ? `<span class="bot">電腦</span>` : ''}</td>${extra.map((c) => `<td class="num">${c.v(p)}</td>`).join('')}<td class="num">${acc}</td><td class="num">${s.dmg || 0}</td></tr>`;
     }).join('');
     const table = `<table><tr><th>玩家</th>${extra.map((c) => `<th class="num">${c.h}</th>`).join('')}<th class="num">命中率</th><th class="num">傷害</th></tr>${rows}</table>`;
-    setHTML('results', `${head}${awards ? `<div class="res-awards">${awards}</div>` : ''}${mine}${table}<div class="res-next">下一場 ${Math.max(0, info.interT)} 秒後開始…</div>`);
+    // 倒數每秒更新，其他內容沒變就不要重畫（以前整塊每秒重畫，獎項的進場動畫一直重播，看起來在閃）；
+    // 內容真的變了（例如經驗值晚一點才算好）才重畫，而且第二次之後不播進場動畫
+    const key = head + awards + mine + table;
+    if (S.resKey !== key) {
+      $('resBody').innerHTML = `${head}${awards ? `<div class="res-awards${S.resShown ? ' still' : ''}">${awards}</div>` : ''}${mine}${table}`;
+      S.resKey = key;
+      S.resShown = true;
+    }
+    setHTML('resNext', `下一場 ${Math.max(0, info.interT)} 秒後開始…`);
   }
 
   // ================================================================ 擊殺訊息、公告
@@ -1139,6 +1149,7 @@
     const mine = e.k === S.myId || e.v === S.myId;
     if (e.self) feedItem(`${nm(e.v)}<span class="w">${WEAPON[e.w] || '💀'}</span>自爆了`, mine ? 'mine' : '');
     else if (e.zone) feedItem(`${nm(e.v)}<span class="w">☠️</span>被毒圈吞噬`, mine ? 'mine' : '');
+    else if (e.lava) feedItem(`${nm(e.v)}<span class="w">🌋</span>掉進岩漿`, mine ? 'mine' : '');
     else feedItem(`${nm(e.k)}<span class="w">${WEAPON[e.w] || '💀'}</span>${nm(e.v)}${e.b ? '<span class="tag">反彈</span>' : ''}${e.f ? '<span class="tag">逼死</span>' : ''}${e.boss ? '<span class="tag boss">BOSS</span>' : ''}`, mine ? 'mine' : '');
   }
   const addSys = (t) => feedItem(esc(t), 'sys');

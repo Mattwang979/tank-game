@@ -9,7 +9,7 @@ const Render = (() => {
   let map = null, W = 0, H = 0, theme = null;
   let groundCv = null, bushCv = null, decalCv = null, decalCtx = null, miniCv = null;
   let groundDirty = true, miniDirty = true, decalFadeT = 0, lastMiniH = -1;
-  let waterTiles = [], portals = [], pads = [];
+  let waterTiles = [], lavaTiles = [], portals = [], pads = [];
   const particles = [], rings = [], beams = [], floaters = [], ghosts = [], planes = [];
   const treads = new Map();
   let shake = 0, hurtFlash = 0, hitMarker = 0, time = 0, killFlash = 0, goldFlash = 0;
@@ -42,6 +42,8 @@ const Render = (() => {
     factory: { a: '#2b2b2e', b: '#29292c', fleck: ['rgba(255,255,255,0.03)', 'rgba(0,0,0,0.18)'], grid: 'rgba(0,0,0,0.22)', shadow: 'rgba(0,0,0,0.42)', bush: ['#2a4a26', '#3a6334', '#477a40', 'rgba(200,255,170,0.14)'], bg: '#070707', water: '#1a3346', ice: '#7fb8d6', steelTop: '#8e98a5', deco: 'oil' },
     snow: { a: '#b8c5d1', b: '#b2bfcb', fleck: ['rgba(255,255,255,0.45)', 'rgba(70,95,120,0.08)'], grid: 'rgba(60,85,110,0.10)', shadow: 'rgba(40,60,85,0.28)', bush: ['#24503f', '#33694f', '#e9f4fb', 'rgba(255,255,255,0.55)'], bg: '#0b1016', water: '#2b6e93', ice: '#9fd3ec', steelTop: '#ffffff', light: true },
     neon: { a: '#15172b', b: '#131528', fleck: ['rgba(120,200,255,0.05)', 'rgba(0,0,0,0.2)'], grid: 'rgba(90,210,255,0.13)', shadow: 'rgba(0,0,0,0.5)', bush: ['#2a1f55', '#3d2b7a', '#5a3fb0', 'rgba(200,170,255,0.25)'], bg: '#05050c', water: '#0d2c5a', ice: '#6fb6e0', steelTop: '#5fe3ff', deco: 'neon' },
+    lava: { a: '#2a2321', b: '#27201e', fleck: ['rgba(255,140,80,0.05)', 'rgba(0,0,0,0.22)'], grid: 'rgba(0,0,0,0.22)', shadow: 'rgba(0,0,0,0.45)', bush: ['#2e2a1a', '#4a4224', '#5c522c', 'rgba(255,200,120,0.12)'], bg: '#0b0605', water: '#123f61', ice: '#7fb8d6', steelTop: '#6e5f58', deco: 'ash',
+      steel: { base: '#463b38', low: '#241c1a', inner: '#52453f', line: 'rgba(255,110,40,0.28)', rivet: '#7d6a60' } },
     asphalt: { a: '#2f3135', b: '#2d2f33', fleck: ['rgba(255,255,255,0.03)', 'rgba(0,0,0,0.16)'], grid: 'rgba(0,0,0,0)', shadow: 'rgba(0,0,0,0.4)', bush: ['#1f5a22', '#2f7d32', '#3a9140', 'rgba(180,255,150,0.18)'], bg: '#08090a', water: '#123f61', ice: '#7fb8d6', steelTop: '#c8ccd2', deco: 'lane' },
   };
   theme = THEMES.grass;
@@ -176,7 +178,7 @@ const Render = (() => {
     g.setTransform(sc, 0, 0, sc, 0, 0);
     b.setTransform(sc, 0, 0, sc, 0, 0);
     b.clearRect(0, 0, W, H);
-    waterTiles = [];
+    waterTiles = []; lavaTiles = [];
     const th = theme;
     const tileAt = (tx, ty) => Core.tileAt(map, tx, ty);
 
@@ -203,6 +205,10 @@ const Render = (() => {
         } else if (th.deco === 'oil' && hash(tx, ty, 56) > 0.88) {
           g.fillStyle = 'rgba(0,0,0,0.3)';
           g.beginPath(); g.ellipse(x + 20, y + 20, 9 + hash(tx, ty, 57) * 8, 6 + hash(tx, ty, 58) * 5, hash(tx, ty, 59) * 3, 0, Math.PI * 2); g.fill();
+        } else if (th.deco === 'ash' && hash(tx, ty, 60) > 0.8) {
+          g.strokeStyle = 'rgba(255,90,30,0.2)'; g.lineWidth = 1.2;
+          const sx = x + 4 + hash(tx, ty, 61) * 10, sy = y + 6 + hash(tx, ty, 62) * 28;
+          g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx + 9, sy - 4 + hash(tx, ty, 63) * 8); g.lineTo(sx + 17, sy - 2 + hash(tx, ty, 64) * 6); g.lineTo(sx + 26, sy - 5 + hash(tx, ty, 65) * 10); g.stroke();
         }
       }
     }
@@ -234,6 +240,7 @@ const Render = (() => {
         if (edge(1, 0)) g.fillRect(x + TILE - 3, y, 3, TILE);
         waterTiles.push([x, y]);
       } else if (t === T.ICE) drawIce(g, x, y, tx, ty);
+      else if (t === T.LAVA) drawLava(g, x, y, tx, ty);
       else if (t === T.PORTAL) {
         const gr = g.createRadialGradient(x + 20, y + 20, 2, x + 20, y + 20, 19);
         gr.addColorStop(0, 'rgba(0,0,0,0.85)'); gr.addColorStop(0.75, 'rgba(10,0,30,0.6)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
@@ -245,6 +252,19 @@ const Render = (() => {
         g.strokeStyle = 'rgba(255,200,60,0.35)'; g.lineWidth = 1.5;
         rr(g, x + 2.5, y + 2.5, TILE - 5, TILE - 5, 5); g.stroke();
       }
+    }
+
+    // 岩漿把旁邊的地面照紅
+    if (lavaTiles.length) {
+      g.save();
+      g.globalCompositeOperation = 'lighter';
+      for (const [x, y] of lavaTiles) {
+        const gl = g.createRadialGradient(x + 20, y + 20, 14, x + 20, y + 20, 42);
+        gl.addColorStop(0, 'rgba(255,90,20,0.16)'); gl.addColorStop(1, 'rgba(255,90,20,0)');
+        g.fillStyle = gl;
+        g.fillRect(x - 24, y - 24, TILE + 48, TILE + 48);
+      }
+      g.restore();
     }
 
     // 陰影
@@ -293,26 +313,50 @@ const Render = (() => {
     if (edge(1, 0)) g.fillRect(x + TILE - 2, y, 2, TILE);
   }
 
+  // 岩漿：亮橘紅底、冷掉的黑色岩塊、跟地面交界有一圈焦黑的邊（會動的光和泡泡在 frame() 畫）
+  function drawLava(g, x, y, tx, ty) {
+    const gr = g.createRadialGradient(x + 20, y + 20, 3, x + 20, y + 20, 30);
+    gr.addColorStop(0, '#ffb347'); gr.addColorStop(0.55, '#ff6a1a'); gr.addColorStop(1, '#c2370c');
+    g.fillStyle = gr;
+    g.fillRect(x, y, TILE, TILE);
+    for (let i = 0; i < 3; i++) {
+      const cx = x + 7 + hash(tx, ty, 200 + i) * 26, cy = y + 7 + hash(tx, ty, 210 + i) * 26, r = 3 + hash(tx, ty, 220 + i) * 4.5;
+      g.fillStyle = 'rgba(70,22,8,0.6)';
+      g.beginPath(); g.ellipse(cx, cy, r * 1.35, r, hash(tx, ty, 230 + i) * 3, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = 'rgba(255,220,120,0.5)'; g.lineWidth = 0.8; g.stroke();
+    }
+    const edge = (dx, dy) => Core.tileAt(map, tx + dx, ty + dy) !== T.LAVA;
+    g.fillStyle = '#2a120a';
+    if (edge(0, -1)) g.fillRect(x, y, TILE, 3);
+    if (edge(0, 1)) g.fillRect(x, y + TILE - 3, TILE, 3);
+    if (edge(-1, 0)) g.fillRect(x, y, 3, TILE);
+    if (edge(1, 0)) g.fillRect(x + TILE - 3, y, 3, TILE);
+    lavaTiles.push([x, y, tx, ty]);
+  }
+
+  const STEEL_DEF = { base: '#5b6470', low: '#373e47', inner: '#6a7480', line: 'rgba(0,0,0,0.35)', rivet: '#aab3be' };
+  const STEEL_NEON = { base: '#272b45', low: '#14172b', inner: '#30355a', line: 'rgba(95,227,255,0.35)', rivet: '#5fe3ff' };
   function drawSteel(g, x, y, tx, ty) {
     const S = (dx, dy) => Core.tileAt(map, tx + dx, ty + dy) === T.STEEL;
     const th = theme;
-    g.fillStyle = th.deco === 'neon' ? '#272b45' : '#5b6470';
+    const sc = th.steel || (th.deco === 'neon' ? STEEL_NEON : STEEL_DEF);
+    g.fillStyle = sc.base;
     g.fillRect(x, y, TILE, TILE);
     g.fillStyle = th.steelTop;
     const cap = th.light ? 5 : 3;
     if (!S(0, -1)) g.fillRect(x, y, TILE, cap);
     if (!S(-1, 0)) g.fillRect(x, y, 3, TILE);
-    g.fillStyle = th.deco === 'neon' ? '#14172b' : '#373e47';
+    g.fillStyle = sc.low;
     if (!S(0, 1)) g.fillRect(x, y + TILE - 3, TILE, 3);
     if (!S(1, 0)) g.fillRect(x + TILE - 3, y, 3, TILE);
-    g.fillStyle = th.deco === 'neon' ? '#30355a' : '#6a7480';
+    g.fillStyle = sc.inner;
     g.fillRect(x + 8, y + 8, TILE - 16, TILE - 16);
-    g.strokeStyle = th.deco === 'neon' ? 'rgba(95,227,255,0.35)' : 'rgba(0,0,0,0.35)';
+    g.strokeStyle = sc.line;
     g.lineWidth = 1;
     g.strokeRect(x + 8.5, y + 8.5, TILE - 17, TILE - 17);
     g.fillStyle = 'rgba(255,255,255,0.08)';
     g.beginPath(); g.moveTo(x + 8, y + 8); g.lineTo(x + TILE - 8, y + 8); g.lineTo(x + 8, y + TILE - 8); g.fill();
-    g.fillStyle = th.deco === 'neon' ? '#5fe3ff' : '#aab3be';
+    g.fillStyle = sc.rivet;
     for (const [rx, ry] of [[5, 5], [TILE - 5, 5], [5, TILE - 5], [TILE - 5, TILE - 5]]) {
       g.beginPath(); g.arc(x + rx, y + ry, 1.8, 0, Math.PI * 2); g.fill();
     }
@@ -387,7 +431,7 @@ const Render = (() => {
     miniCv = miniCv || document.createElement('canvas');
     miniCv.width = map.w; miniCv.height = map.h;
     const m = miniCv.getContext('2d');
-    const col = { [T.STEEL]: '#8a94a1', [T.BRICK]: '#a0522d', [T.WATER]: '#1f6aa5', [T.BUSH]: '#2f7d32', [T.BARREL]: '#e0442f', [T.ICE]: '#a8dcf0', [T.PORTAL]: '#b388ff' };
+    const col = { [T.STEEL]: '#8a94a1', [T.BRICK]: '#a0522d', [T.WATER]: '#1f6aa5', [T.BUSH]: '#2f7d32', [T.BARREL]: '#e0442f', [T.ICE]: '#a8dcf0', [T.PORTAL]: '#b388ff', [T.LAVA]: '#ff5a1f' };
     for (let y = 0; y < map.h; y++) for (let x = 0; x < map.w; x++) {
       const t = map.tiles[y * map.w + x];
       m.fillStyle = col[t] || (PAD_DIR[t] ? '#c9a227' : theme.light ? '#8d9aa6' : '#3a4236');
@@ -1349,6 +1393,25 @@ const Render = (() => {
     }
     c.drawImage(decalCv, 0, 0);
 
+    // 岩漿：整片慢慢一明一暗、冒泡泡、往上飄火星
+    if (lavaTiles.length) {
+      c.save();
+      c.globalCompositeOperation = 'lighter';
+      for (const [x, y, tx, ty] of lavaTiles) {
+        c.fillStyle = `rgba(255,140,40,${0.07 + 0.07 * Math.sin(time * 1.6 + hash(tx, ty, 300) * 6.28)})`;
+        c.fillRect(x, y, TILE, TILE);
+        const ph = time * 0.8 + hash(tx, ty, 310), cyc = Math.floor(ph), u = ph - cyc;
+        const bx = x + 8 + hash(tx, ty, 320 + cyc) * 24, by = y + 8 + hash(tx, ty, 340 + cyc) * 24;
+        c.fillStyle = `rgba(255,224,138,${(1 - u) * 0.45})`;
+        c.beginPath(); c.arc(bx, by, 1 + u * 5, 0, Math.PI * 2); c.fill();
+      }
+      c.restore();
+      if (Math.random() < (hiQ ? 0.35 : 0.1)) {
+        const [x, y] = lavaTiles[Math.floor(Math.random() * lavaTiles.length)];
+        P({ x: x + rand(4, 36), y: y + rand(4, 36), vx: rand(-12, 12), vy: rand(-55, -25), life: rand(0.9, 1.6), r: rand(1.2, 2.2), r1: 0.4, c: Math.random() < 0.5 ? 'rgba(255,170,60,0.9)' : 'rgba(255,90,30,0.9)', add: true, drag: 0.6 });
+      }
+    }
+
     // 水波
     if (waterTiles.length) {
       c.strokeStyle = theme.light ? 'rgba(255,255,255,0.35)' : 'rgba(150,215,255,0.22)';
@@ -1428,6 +1491,10 @@ const Render = (() => {
         P({ x: t.x + Math.cos(back) * 18 * sc2, y: t.y + Math.sin(back) * 18 * sc2, vx: Math.cos(back) * 60 + rand(-20, 20), vy: Math.sin(back) * 60 + rand(-20, 20), life: 0.25, r: 4, r1: 1, c: 'rgba(100,180,255,0.8)', add: true });
       }
       if (t.flags & 256) flameBurst(t.x + Math.cos(t.ta) * 24 * sc2, t.y + Math.sin(t.ta) * 24 * sc2, t.ta, hiQ ? 4 : 2);
+      if (lavaTiles.length && Core.tileAt(map, Math.floor(t.x / TILE), Math.floor(t.y / TILE)) === T.LAVA && Math.random() < 0.6) {
+        P({ x: t.x + rand(-14, 14) * sc2, y: t.y + rand(-12, 12) * sc2, vx: rand(-15, 15), vy: rand(-70, -30), life: rand(0.3, 0.55), r: rand(3, 5), r1: rand(8, 12), c: Math.random() < 0.5 ? 'rgba(255,150,40,0.7)' : 'rgba(255,90,20,0.7)', add: true, drag: 1.5 });
+        if (Math.random() < 0.25) smoke(t.x, t.y, 1, 8, 0.8, 'rgba(40,30,25,0.45)');
+      }
       if (t.hp < (t.mh || C.MAX_HP) * 0.35 && Math.random() < 0.25) smoke(t.x, t.y, 1, 9, 0.9, 'rgba(40,40,40,0.5)');
     }
 
@@ -1536,11 +1603,12 @@ const Render = (() => {
     // 受傷紅框
     hurtFlash = Math.max(0, hurtFlash - dt * 1.6);
     const lowHp = st.lowHp ? 0.18 + Math.sin(time * 6) * 0.08 : 0;
-    const vig = Math.max(hurtFlash, lowHp, st.inZone ? 0.22 + Math.sin(time * 5) * 0.06 : 0);
+    const lavaV = st.onLava ? 0.3 + Math.sin(time * 9) * 0.06 : 0;
+    const vig = Math.max(hurtFlash, lowHp, lavaV, st.inZone ? 0.22 + Math.sin(time * 5) * 0.06 : 0);
     if (vig > 0.01) {
       const w = cv.width, h = cv.height;
       const gr = c.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.35, w / 2, h / 2, Math.max(w, h) * 0.75);
-      const col = st.inZone && hurtFlash < 0.1 ? '150,40,220' : '220,0,0';
+      const col = lavaV && lavaV >= hurtFlash ? '255,90,0' : st.inZone && hurtFlash < 0.1 ? '150,40,220' : '220,0,0';
       gr.addColorStop(0, `rgba(${col},0)`);
       gr.addColorStop(1, `rgba(${col},${vig})`);
       c.fillStyle = gr;
